@@ -1,0 +1,15 @@
+# directories
+/instance_generator/
+/results_analysis/
+/debugging_scripts/
+/data/
+.idea/
+.project
+.pydevproject
+
+# file formats
+*.pyc
+
+# files
+/experiments/call_solver.py
+/experiments/testing_with_rs_real_data.py
