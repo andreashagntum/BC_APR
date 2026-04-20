@@ -436,7 +436,7 @@ def spprc_algorithm(pricing_network, forb_res, forb_skill_comps, mu, delta, rho_
 
     # 1.3 if all tasks in the current network are part of forced tours: skip the network
     if pricing_network.tasks == []:
-        return [], math.inf, None, count_labels, count_dom, math.inf, 0, 0, {}, 0
+        return [], math.inf, None, count_labels, count_dom, math.inf,  0, 0
 
     # 1.4 if only_best_tasks == True, we only allow extensions to delta_tasks many tasks with maximum task execution reward
     if only_best_tasks:
@@ -456,7 +456,7 @@ def spprc_algorithm(pricing_network, forb_res, forb_skill_comps, mu, delta, rho_
     # 1.6 if no skill comps exist (i.e. formation can not be built using the total available workforce): skip pricing network
     if len(skill_comps) == 0:
         # this should never happen but is kept as a fallback option
-        return [], math.inf, None, count_labels, count_dom, math.inf, 0, 0, {}, 0
+        return [], math.inf, None, count_labels, count_dom, math.inf, 0, 0
 
 
     # 1.7 generate all initial labels

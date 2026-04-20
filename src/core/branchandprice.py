@@ -448,7 +448,6 @@ def check_integer_sol(node, node_tours, inst, solution, node_sol, node_val, tree
         else:  # if DMP is not used: need to run feasibility check to get the actual proper skill compositions for each team
             optimal_tours_skill_comp = is_sol_actually_feasible_extended(node_sol, node_tours, inst.workers,
                                                                          node.forbidden_tours,
-                                                                         node.forced_tours,
                                                                          node.solve_as_dmp)[0]
 
         solution.disaggr_feas_solutions += 1
