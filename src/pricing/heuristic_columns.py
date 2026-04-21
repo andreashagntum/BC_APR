@@ -112,7 +112,7 @@ def find_column_greedy(all_initial_labels, pricing_network, node_in_tree, mu, de
             curr_label = extensions[0]
 
 
-def find_column_vnd(current_sol_tours, pricing_network, node_in_tree, forb_res, mu, delta, rho_gr, rho_le, psi, zeta_le,
+def find_column_vnd(current_sol_tours, pricing_network, node_in_tree, forb_tour_idxs, mu, delta, rho_gr, rho_le, psi, zeta_le,
                     zeta_gr, t_max_le,  t_max_gr, skill_comp_cnt, solve_as_dmp, yuan_approach, greedy_label):
     """Search for new columns by applying the VND algorithm proposed by Yuan et al. (2015).
     Procedure: For each tour that is part of the current basic solution, apply all potential single-task delete and
@@ -127,8 +127,8 @@ def find_column_vnd(current_sol_tours, pricing_network, node_in_tree, forb_res, 
         Pricing network for which negative columns are to be computed
     node_in_tree: GH_node
         Current node in the branching tree
-    forb_res: dict
-        Maps indices of forbidden tours to their resource, which equals its number of tasks + 1. Indices always start at 0.
+    forb_tour_idxs: list
+        List of indices of forbidden tours in current pricing network. Indices always start at 0 and increase incrementally.
     mu: dict
         Maps task execution constraints to their dual values
     delta: dict
@@ -178,7 +178,7 @@ def find_column_vnd(current_sol_tours, pricing_network, node_in_tree, forb_res, 
                 tasks.remove(task_to_delete)
                 sequence = ["source"] + tasks + ["sink"]
                 # 2.1.2 create label object and initialize it
-                curr_label = Label(forb_res, pricing_network.formation, tour.leave_time, node_in_tree)
+                curr_label = Label(forb_tour_idxs, pricing_network.formation, tour.leave_time, node_in_tree)
                 curr_label.median_finish_per_task[pricing_network.source] = curr_label.median_finish
                 for i in range(len(node_in_tree.gomory_cuts_lhs)):
                     curr_label.frac_coeffs_per_cut[i] = 0
@@ -263,7 +263,7 @@ def find_column_vnd(current_sol_tours, pricing_network, node_in_tree, forb_res, 
                     tasks.insert(pos_idx, task_to_insert)
                     sequence = ["source"] + tasks + ["sink"]
                     # 2.2.2 create label object and initialize it
-                    curr_label = Label(forb_res, pricing_network.formation, tour.leave_time, node_in_tree)
+                    curr_label = Label(forb_tour_idxs, pricing_network.formation, tour.leave_time, node_in_tree)
                     curr_label.median_finish_per_task[pricing_network.source] = curr_label.median_finish
                     for i in range(len(node_in_tree.gomory_cuts_lhs)):
                         curr_label.frac_coeffs_per_cut[i] = 0
@@ -448,10 +448,8 @@ def find_columns_heuristics(pricing_networks, forbidden_tours_per_formation, mu,
         pricing_network.task_resources_consd = []  # reset tasks for which resources will be considered in labeling algorithm
         neg_heur_labels_per_formation[pricing_network.formation_id] = []
         skill_comps_cnt = [pricing_network.default_comp_cnt]
-        # 2.1.2 set forbidden resources for all forbidden tours (needed for label extensions during VND algorithm)
-        forb_res = {}
-        for i in range(len(pricing_network.forb_tours)):
-            forb_res[i] = len(pricing_network.forb_tours[i].tasks) + 1 # length of forbidden tour
+        # 2.1.2 get indices of forbidden tours (needed for label extensions during VND algorithm)
+        forb_tour_idxs = list(range(len(pricing_network.forb_tours))) # also get their indices
 
         greedy_label = None
         # 2.2 if current node is the root: call greedy
@@ -460,7 +458,7 @@ def find_columns_heuristics(pricing_networks, forbidden_tours_per_formation, mu,
 
                 # 2.2.2 get all initial labels, i.e. single-task labels that leave the sink, and sort them w.r.t their reduced cost
                 # compute initial labels
-                _, all_initial_labels, _ = create_initial_labels(pricing_network, forb_res, mu, delta, rho_gr,
+                _, all_initial_labels, _ = create_initial_labels(pricing_network, forb_tour_idxs, mu, delta, rho_gr,
                                                                    rho_le, psi, zeta_le, zeta_gr,
                                                                    t_max_le, t_max_gr, skill_comps_cnt[0],
                                                                    solve_as_dmp, node_in_tree, yuan_approach)
@@ -479,7 +477,7 @@ def find_columns_heuristics(pricing_networks, forbidden_tours_per_formation, mu,
                             neg_heur_labels_per_formation[pricing_network.formation_id].append(greedy_label)
 
         # 2.3 apply VND to all basis columns that use the current formation
-        heur_labels = find_column_vnd(current_sol_tours, pricing_network, node_in_tree, forb_res, mu, delta,
+        heur_labels = find_column_vnd(current_sol_tours, pricing_network, node_in_tree, forb_tour_idxs, mu, delta,
                                       rho_gr, rho_le, psi, zeta_le,
                                       zeta_gr, t_max_le, t_max_gr, skill_comps_cnt[0], solve_as_dmp,
                                       yuan_approach, greedy_label)

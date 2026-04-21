@@ -326,38 +326,28 @@ class PricingNetwork():
         """
         start_setup = time.time()
         self.forb_tours = list(forbidden_tours)
-        # compute resources for each arc in graph
-        for arc in self.graph.edges:
-            head_node = arc[0]
-            tail_node = arc[1]
-            task = tail_node
 
-            # 1. set resources for forbidden tours
-            forb_res = {}
-            for i in range(len(forbidden_tours)):
-                # 1.1 check if arc is part of forbidden tour
-                if tail_node != self.sink:
-                    if (head_node == self.source or head_node in forbidden_tours[i].tasks) and tail_node in forbidden_tours[i].tasks:
-                        if head_node == self.source:
-                            head_idx = -1
-                        else:
-                            head_idx = forbidden_tours[i].tasks.index(head_node)
-                        tail_idx = forbidden_tours[i].tasks.index(tail_node)
-                        if tail_idx == head_idx + 1:
-                            # set resource: triple (leave, quantile_finish, tasks) sufficient to identify potentially forbidden tours
-                            forb_res[i] = (forbidden_tours[i].leave_time, forbidden_tours[i].quantile_finish_time[tail_node],
-                                           forbidden_tours[i].tasks)
-                else:
-                    if head_node in forbidden_tours[i].tasks:
-                        # set resource: triple (leave, quantile_finish, tasks) sufficient to identify potentially forbidden tours
-                        forb_res[i] = (forbidden_tours[i].leave_time, forbidden_tours[i].quantile_finish_time[tail_node],
-                                       forbidden_tours[i].tasks)
-            # 2. check if mode is dominated for given task
+        # set up forbidden resources per tour
+        forb_res_per_arc = {arc: {} for arc in self.graph.edges}
+        for i in range(len(forbidden_tours)):
+            # get all forbidden arcs
+            forb_seq = [self.source] + forbidden_tours[i].tasks + [self.sink]
+            forb_arcs = [(forb_seq[it], forb_seq[it + 1]) for it in range(len(forb_seq) - 1)]
+            # for each arc: store leave time of forbidden tour and quantile finish time at tail node
+            for arc in forb_arcs:
+                if arc not in forb_res_per_arc:
+                    forb_res_per_arc[arc] = {}
+                forb_res_per_arc[arc][i] = (forbidden_tours[i].leave_time, forbidden_tours[i].quantile_finish_time[arc[1]])
+
+        # store resources in Resources objects
+        for arc in self.graph.edges:
+            # 1. check if mode is dominated for given task
             non_dom_form = False
-            if tail_node != self.sink:
-                if self.formation_id in list(inst.modes[tail_node].keys()):
+            if arc[1] != self.sink:
+                if self.formation_id in list(inst.modes[arc[1]].keys()):
                     non_dom_form = True
-            self.resources[(arc[0], arc[1])] = Resource(task, non_dom_form, forb_res)  # task = tail_task
+            # 2. store resources
+            self.resources[(arc[0], arc[1])] = Resource(non_dom_form, forb_res_per_arc[arc])
 
         self.time_setup += time.time() - start_setup
 
@@ -421,18 +411,17 @@ class PricingNetwork():
             Number of initial labels created by workers.pricing.dynamic_programming.create_initial_labels()
         """
 
-        # 1. for each forbidden tour: get length of forbidden tour
-        # these values define how much of the respective resource a label must accumulate to be considered equal
-        # to a forbidden tour (and thus to be skipped/discarded)
-        forb_res = {}
+        # 1. for each forbidden tour: get their skill composition
+        # when solving the DMP, we do not discard labels because they are equal to a forbidden tour. instead, when
+        # ex-post computing the best label, we skip forbidden skill compositions
         forb_skill_comps = {}       # list of skill comps of each forbidden tour
+        forb_tour_idxs = list(range(len(self.forb_tours))) # also get their indices
         for i in range(len(self.forb_tours)):
-            forb_res[i] = len(self.forb_tours[i].tasks) + 1 # length of the forbidden path
             forb_skill_comps[i] = self.forb_tours[i].skill_comp
 
         # 2. call algorithm
         (min_paths, min_costs, min_labels, count_labels, count_dom, tour_costs, sink_labels_network,
-         no_initial_labels) = spprc_algorithm(self, forb_res, forb_skill_comps, mu, delta, rho_gr,
+         no_initial_labels) = spprc_algorithm(self, forb_tour_idxs, forb_skill_comps, mu, delta, rho_gr,
                                                                         rho_le, psi, zeta_le, zeta_gr, only_best_tasks,
                                                                         best_task_cnt, t_max_le, t_max_gr,
                                                                         solve_as_dmp, node, yuan_approach)
@@ -521,7 +510,7 @@ class PricingNetwork():
         return tour
 
 class Resource():
-    def __init__(self, node, non_dom_form, forb_res):
+    def __init__(self, non_dom_form, forb_res):
         """Create ResourceObject for a certain node. Contains resources needed during dominance checks or to identify
         forbidden (sub)paths.
         Parameters
@@ -533,6 +522,5 @@ class Resource():
         forb_res:
             Maps indices of forbidden tours to their length
         """
-        self.task = node # node can also be the sink
         self.forb_res = forb_res
         self.non_dom_formation = non_dom_form

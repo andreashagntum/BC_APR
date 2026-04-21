@@ -37,7 +37,7 @@ from src.pricing.utils import *
 from config.config import *
 
 
-def create_initial_labels(pricing_network, forb_res, mu, delta, rho_gr, rho_le, psi, zeta_le, zeta_gr,
+def create_initial_labels(pricing_network, forb_tour_idxs, mu, delta, rho_gr, rho_le, psi, zeta_le, zeta_gr,
                         t_max_le, t_max_gr, skill_comp_cnt, solve_as_dmp, node_in_tree, yuan_approach):
     """Create initial labels for each task node and possible depot leave time. Leave times that would incur
     unnecessary waiting at the first task are automatically skipped.
@@ -46,8 +46,8 @@ def create_initial_labels(pricing_network, forb_res, mu, delta, rho_gr, rho_le, 
     Parameters
     pricing_network: workers.pricing.dynamic_programming.PricingNetwork
         Pricing network for which initial labels are to be computed
-    forb_res: dict
-        Maps indices of forbidden tours to their resource, which equals its number of tasks + 1. Indices always start at 0.
+    forb_tour_idxs: list
+        List of indices of forbidden tours in current pricing network. Indices always start at 0 and increase incrementally.
     mu: dict
         Maps task execution constraints to their dual values
     delta: dict
@@ -178,7 +178,7 @@ def create_initial_labels(pricing_network, forb_res, mu, delta, rho_gr, rho_le, 
             # single time bin exists, one can safely prune any time instants t that would incur waiting time
             labels_created += 1
             # 2.4.1 create Label objects, set initial data
-            node_t_label = Label(forb_res, pricing_network.formation, t, node_in_tree)
+            node_t_label = Label(forb_tour_idxs, pricing_network.formation, t, node_in_tree)
             node_t_label.median_finish_per_task[pricing_network.source] = node_t_label.median_finish
             for i in range(len(node_in_tree.gomory_cuts_lhs)):
                 node_t_label.frac_coeffs_per_cut[i] = 0
@@ -318,13 +318,13 @@ def create_initial_labels(pricing_network, forb_res, mu, delta, rho_gr, rho_le, 
             # 2.4.8 increase ext.non_dom_formation by 1 if node is non-dominated
             node_t_label.non_dom_formation += resources_arc.non_dom_formation  # add 1 if node is non-dominated
 
-            # 2.4.9 check if label is part of (or equal to) a forbidden tour
+            # 2.4.9 set is_forbidden_subpath to 0 for all tours that do not use the current first edge
             if not new_dominated:
-                resources = pricing_network.resources[(pricing_network.source, node)].forb_res
-                for forb_tour_id in resources:
-                    # check if start time of current tour and task equals start time of forbidden tour and task is in forbidden tour
-                    if not (node_t_label.start_time_from_depot == resources[forb_tour_id][0] and node_t_label.quantile_case_finish ==
-                            resources[forb_tour_id][1]):
+                # get all indices of forbidden tours that use the current edge
+                resources = pricing_network.resources[(pricing_network.source, node)]
+                # if edge (source, node) is not part of forbidden tour => can't be a subpath => set is_forbidden_subpath to 0
+                for forb_tour_id in node_t_label.is_forbidden_subpath:
+                    if forb_tour_id not in resources.forb_res:
                         node_t_label.is_forbidden_subpath[forb_tour_id] = False
 
             # 2.4.10 if label is not dominated: add it to initial_labels[node] and node_labels
@@ -336,7 +336,7 @@ def create_initial_labels(pricing_network, forb_res, mu, delta, rho_gr, rho_le, 
 
     return node_labels, initial_labels, labels_to_finish_times
 
-def spprc_algorithm(pricing_network, forb_res, forb_skill_comps, mu, delta, rho_gr, rho_le, psi, zeta_le, zeta_gr,
+def spprc_algorithm(pricing_network, forb_tour_idxs, forb_skill_comps, mu, delta, rho_gr, rho_le, psi, zeta_le, zeta_gr,
                     only_best_tasks, delta_tasks, t_max_le, t_max_gr,
                     solve_as_dmp, node_in_tree, yuan_approach):
     """Label algorithm for the ESPPRC. Solves the ESPPRC for a single input pricing network. Workflow is as follows:
@@ -372,8 +372,8 @@ def spprc_algorithm(pricing_network, forb_res, forb_skill_comps, mu, delta, rho_
     Parameters:
     pricing_network: workers.pricing.dynamic_programming.PricingNetwork
         Pricing network for which negative columns are to be computed
-    forb_res: dict
-        Maps indices of forbidden tours to their resource, which equals its number of tasks + 1. Indices always start at 0.
+    forb_tour_idxs: list
+        List of indices of forbidden tours in current pricing network. Indices always start at 0 and increase incrementally.
     forb_skill_comps:
         Maps indices of forbidden tours to their skill composition (used for identification of forbidden tours when current
         node is solved using the DMP)
@@ -461,7 +461,7 @@ def spprc_algorithm(pricing_network, forb_res, forb_skill_comps, mu, delta, rho_
 
     # 1.7 generate all initial labels
     # create containers for labels w.r.t. their worst-case finish times
-    node_labels, initial_labels, labels_to_finish_times = create_initial_labels(pricing_network, forb_res,
+    node_labels, initial_labels, labels_to_finish_times = create_initial_labels(pricing_network, forb_tour_idxs,
                                                                             mu, delta, rho_gr, rho_le, psi, zeta_le, zeta_gr,
                                                                             t_max_le, t_max_gr, skill_comps_cnt[0],
                                                                             solve_as_dmp, node_in_tree, yuan_approach)
@@ -524,8 +524,8 @@ def spprc_algorithm(pricing_network, forb_res, forb_skill_comps, mu, delta, rho_
                     # forbidden tour (will be skipped when looking for the optimal skill composition and label w.r.t. reduced costs)
                     if solve_as_dmp:
                         forbidden_skill_comps_per_sink_label[len(node_labels[pricing_network.sink])-1] = []
-                        for forb_tour_id in new_label.forb_res:
-                            if new_label.is_forbidden_subpath:
+                        for forb_tour_id in new_label.is_forbidden_subpath:
+                            if new_label.is_forbidden_subpath[forb_tour_id]:
                                 forbidden_skill_comps_per_sink_label[len(node_labels[pricing_network.sink])-1].append(forb_skill_comps[forb_tour_id])
                     continue
 
@@ -586,7 +586,7 @@ def spprc_algorithm(pricing_network, forb_res, forb_skill_comps, mu, delta, rho_
                             # and label w.r.t. reduced costs)
                             if solve_as_dmp:
                                 forbidden_skill_comps_per_sink_label[len(node_labels[pricing_network.sink])-1] = []
-                                for forb_tour_id in sink_label.forb_res:
+                                for forb_tour_id in sink_label.is_forbidden_subpath:
                                     if sink_label.is_forbidden_subpath[forb_tour_id]:
                                         forbidden_skill_comps_per_sink_label[len(node_labels[pricing_network.sink])-1].append(
                                             forb_skill_comps[forb_tour_id])
@@ -981,13 +981,13 @@ def check_for_duplicate_tasks(label):
 
 class Label():
 
-    def __init__(self, forb_res, formation, start_time_from_depot, node):
+    def __init__(self, forb_tour_idxs, formation, start_time_from_depot, node):
         """Class for objects that comprise a subpath in a given pricing network, which starts at the depot at a certain
         time and executes a sequence of tasks.
 
         Parameters
-        forb_res: dict
-            Maps indices of forbidden tours to their resource, which equals its number of tasks + 1. Indices always start at 0.
+        forb_tour_idxs: list
+            List of indices of forbidden tours in current pricing network. Indices always start at 0 and increase incrementally.
         formation: dict
             Maps skill levels to the number of required workers (including downgrading).
         start_time_from_depot: int
@@ -999,7 +999,6 @@ class Label():
         self.cost = 0  # total cost of sequence
         self.tasks = []  # list of task resources in chronological order
         self.hash = ""  # hash of path
-        self.forb_res = forb_res.copy()  # resources for forbidden tours
         self.non_dom_formation = 0  # >0 iff. all tasks along path are non-dominated
         self.start_time_pmf = {}  # probability distribution of start time at most recent node
         self.start_time_cdf = {}  # probability distribution of start time at most recent node
@@ -1021,8 +1020,8 @@ class Label():
         self.integer_coeffs_per_cut = {}
         self.is_forbidden_subpath = {}
         self.cost_per_skill_comp = {}     # only for yuan approach: reduced cost of label for each skill comp.
-        for res in self.forb_res:
-            self.is_forbidden_subpath[res] = True
+        for forb_idx in forb_tour_idxs:
+            self.is_forbidden_subpath[forb_idx] = True
         self.task_reward = 0
         self.gomory_penalty = {}
         for i in range(len(node.gomory_cuts_lhs)):
@@ -1056,7 +1055,7 @@ class Label():
         cln: Label
             Cloned label
         """
-        cln = Label(self.forb_res, self.formation, self.start_time_from_depot, node)
+        cln = Label(list(self.is_forbidden_subpath.keys()), self.formation, self.start_time_from_depot, node)
         cln.cost = self.cost
         cln.tour_cost = self.tour_cost
         cln.total_busy_penalty = self.total_busy_penalty
@@ -1072,7 +1071,6 @@ class Label():
         cln.length = self.length
         cln.sequence = self.sequence.copy()
         cln.tasks = self.tasks.copy()
-        cln.forb_res = self.forb_res.copy()
         cln.task_cost_dict = self.task_cost_dict.copy()
         cln.tw_viol_prob = self.tw_viol_prob.copy()
         cln.start_time_cdf_per_task = self.start_time_cdf_per_task.copy()
@@ -1400,20 +1398,20 @@ class Label():
             if (ext.sequence[-2], ext.sequence[-1], ext.quantile_case_finish) in forbidden_arcs:
                 return None
 
-            # 2.5 check if label is now equal to a forbidden tour
-            for forb_tour_id in resources.forb_res:
-                # check if start time of current tour equals start time of forbidden tour
-                if ext.start_time_from_depot == resources.forb_res[forb_tour_id][0] and ext.quantile_case_finish == \
-                        resources.forb_res[forb_tour_id][1]:
-                    if ext.is_forbidden_subpath[forb_tour_id]:
-                        # if AMP is solved: return empty extension: tried creating a forbidden tour
+            # 2.5 check if label is now equal to a forbidden tour and update ext.is_forbidden_subpath
+            for forb_tour_id in ext.is_forbidden_subpath:
+                # 2.5.1 if edge (source, node) is not part of forbidden tour => can't be a subpath => set is_forbidden_subpath to 0
+                if forb_tour_id not in resources.forb_res:
+                    ext.is_forbidden_subpath[forb_tour_id] = False
+                # 2.5.2 else: if start times differ: tour does not equal forbidden (sub)tour => also set is_forbidden_subpath to 0
+                else:
+                    # if start times differ: tour is not equal to a forbidden tour
+                    if resources.forb_res[forb_tour_id][0] != ext.start_time_from_depot:
+                        ext.is_forbidden_subpath[forb_tour_id] = False
+                    # else: tour is equal to a forbidden tour => return empty extension if AMP is solved
+                    else:
                         if not solve_as_dmp:
                             return None
-                        # Note: if DMP is solved, we guarantee that this label will not yield a forbidden tour durin
-                        # the identification of the best skill composition, which is done in find_best_label_skill_comps()
-                # else: label does not represent a subpath of forbidden tour with above id => remember this for dominance rule!
-                else:
-                    ext.is_forbidden_subpath[forb_tour_id] = False
 
             return ext
 
@@ -1537,12 +1535,16 @@ class Label():
                     # 4.8 increase ext.non_dom_formation by 1 if node is non-dominated
                     ext.non_dom_formation += resources.non_dom_formation  # add 1 if node is non-dominated
 
-                    # 4.9 check if label is equal to a forbidden (sub)path
-                    for forb_tour_id in resources.forb_res:
-                        # check if start time of current tour equals start time of forbidden tour
-                        if not (ext.start_time_from_depot == resources.forb_res[forb_tour_id][0] and ext.quantile_case_finish ==
-                                resources.forb_res[forb_tour_id][1]):
+                    # 4.9 check if label is now equal to a forbidden tour and update ext.is_forbidden_subpath
+                    for forb_tour_id in ext.is_forbidden_subpath:
+                        # 4.9.1 if edge (source, node) is not part of forbidden tour => can't be a subpath => set is_forbidden_subpath to 0
+                        if forb_tour_id not in resources.forb_res:
                             ext.is_forbidden_subpath[forb_tour_id] = False
+                        # 4.9.2 else: if start times differ: tour does not equal forbidden (sub)tour => also set is_forbidden_subpath to 0
+                        else:
+                            # if start times differ: tour is not equal to a forbidden tour
+                            if resources.forb_res[forb_tour_id][0] != ext.start_time_from_depot:
+                                ext.is_forbidden_subpath[forb_tour_id] = False
                     return ext
 
                 else:
@@ -1575,8 +1577,8 @@ class Label():
         # 1. check forbidden resources
         # if current subpath is equal to a forbidden subpath -> cannot dominate any other label
         # as this might lead to cutting off optimal labels
-        for res in self.forb_res:
-            if self.is_forbidden_subpath[res]:
+        for tour_idx in self.is_forbidden_subpath:
+            if self.is_forbidden_subpath[tour_idx]:
                 return False
 
         # 2. compare quantile-case finish times (for dual cost dominance)
