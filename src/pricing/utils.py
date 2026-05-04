@@ -21,6 +21,8 @@ def get_all_skill_comps(inst, formation_id):
         Similar to feasible_comps, but information is aggregated on a skill level-basis.
     feasible_comps_cnt_ids: dict
         Maps strings akin to inst.formations keys to the corresponding entry in feasible_comps_cnt
+    feasible_comps_ids: dict
+        Maps strings akin to inst.formations keys to the corresponding entry in feasible_comps
     """
     # 1. standardize formation by filling worker requirement for skill levels that are not needed by formation_id with 0
     formation_dict = inst.formations[formation_id]
@@ -50,6 +52,7 @@ def get_all_skill_comps(inst, formation_id):
     feasible_comps = []
     feasible_comps_cnt = []
     feasible_comps_cnt_ids = {}
+    feasible_comps_ids = {}
     all_tuples_list = [p for p in itertools.product(*all_tuples.values())]
     formation_dict_keys = list(formation_dict.keys())
     for tup in all_tuples_list:
@@ -92,8 +95,9 @@ def get_all_skill_comps(inst, formation_id):
                 id_string += f"{k}:{workers_per_level[k]},"
             id_string = id_string.rstrip(",")
             feasible_comps_cnt_ids[id_string] = workers_per_level
+            feasible_comps_ids[id_string] = skill_comp
 
-    return feasible_comps, feasible_comps_cnt, feasible_comps_cnt_ids
+    return feasible_comps, feasible_comps_cnt, feasible_comps_cnt_ids, feasible_comps_ids
 
 def find_alpha_quantile(start_time_cdf, alpha):
     """Find alpha quantile in a given CDF. Usually runs faster than bisect_left, as our CDFs tend to have very few values

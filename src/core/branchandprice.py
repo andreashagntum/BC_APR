@@ -169,6 +169,9 @@ def get_solution(inst, no_gomory_cuts, branch_on_task_finish_times, use_dmp, tl_
     root = GH_node(inst)
     root.is_root = True
     root.tours = init_tours
+    # 1.8.1 Yuan et al. (2015) only use a DMP-equivalent formulation => set root.solve_as_dmp to True
+    if yuan_approach:
+        root.solve_as_dmp = True
 
     # 1.9 define B&P tree object with
     tree = []

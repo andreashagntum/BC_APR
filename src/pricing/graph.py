@@ -278,7 +278,7 @@ class PricingNetwork():
 
 
         # 5. compute all possible skill compositions
-        self.skill_comps, self.skill_comps_cnt, self.skill_comps_cnts_ids = get_all_skill_comps(inst, self.formation_id)
+        self.skill_comps, self.skill_comps_cnt, self.skill_comps_cnts_ids, self.skill_comps_ids = get_all_skill_comps(inst, self.formation_id)
         # 6. compute default skill composition
         skill_comp = {}
         skill_comp_cnt = {}

@@ -400,7 +400,7 @@ def solve_heuristic_master(inst, solution, all_tours, root, pricing_networks, cu
     skill_comps_cnts_per_formation = {}
     for formation_id in inst.formations:
         skill_comps_per_formation[formation_id], skill_comps_cnts_per_formation[
-            formation_id], skill_comps_cnts_ids = get_all_skill_comps(inst, formation_id)
+            formation_id], skill_comps_cnts_ids, skill_comps_ids = get_all_skill_comps(inst, formation_id)
     # 4.2 generate all possible tours
     heur_tours = []
     for tour in all_tours:

@@ -451,7 +451,7 @@ def spprc_algorithm(pricing_network, forb_tour_idxs, forb_skill_comps, mu, delta
     else:
         skill_comps = pricing_network.skill_comps.copy()
         skill_comps_cnt = pricing_network.skill_comps_cnt.copy()
-        last_skill_comp_idx = 1     # only solve pricing network for a single skill comp. as dominance relations transfer to other skill comps.
+        last_skill_comp_idx = 0     # only solve pricing network for a single skill comp. as dominance relations transfer to other skill comps.
 
     # 1.6 if no skill comps exist (i.e. formation can not be built using the total available workforce): skip pricing network
     if len(skill_comps) == 0:
@@ -1363,7 +1363,7 @@ class Label():
                 for skill_comp_id in pricing_network.skill_comps_cnts_ids:
                     busy_penalty_skill_comp = get_busy_penalty(self.formation, delta, t_from, t_to,
                                                     pricing_network.skill_comps_cnts_ids[skill_comp_id], solve_as_dmp)
-                    self.cost_per_skill_comp[skill_comp_id] += busy_penalty_skill_comp + branching_penalty + arc_penalty
+                    ext.cost_per_skill_comp[skill_comp_id] += busy_penalty_skill_comp + branching_penalty + arc_penalty
 
             # gomory cut penalty
             for i in range(len(node_in_tree.gomory_cuts_lhs)):
@@ -1493,7 +1493,7 @@ class Label():
                         for skill_comp_id in pricing_network.skill_comps_cnts_ids:
                             busy_penalty_skill_comp = get_busy_penalty(self.formation, delta, t_from, t_to,
                                                             pricing_network.skill_comps_cnts_ids[skill_comp_id], solve_as_dmp)
-                            self.cost_per_skill_comp[skill_comp_id] += busy_penalty_skill_comp + branching_penalty + arc_penalty + ext.task_costs - mu[ext_task]
+                            ext.cost_per_skill_comp[skill_comp_id] += busy_penalty_skill_comp + branching_penalty + arc_penalty + ext.task_costs - mu[ext_task]
                     # gomory cut penalty
                     for i in range(len(node_in_tree.gomory_cuts_lhs)):
                         # skip trivial psi values to avoid unnecessary calculations
@@ -1608,10 +1608,11 @@ class Label():
                     if self.cost_per_skill_comp[skill_comp_id] > other.cost_per_skill_comp[skill_comp_id]:
                         return False
             # 5.1.2 else: compare depot leave times and offset reduced cost
-            if self.start_time_from_depot < other.start_time_from_depot:
-                return False
-            if self.cost - self.total_busy_penalty  > other.cost - other.total_busy_penalty:
-                return False
+            else:
+                if self.start_time_from_depot < other.start_time_from_depot:
+                    return False
+                if self.cost - self.total_busy_penalty  > other.cost - other.total_busy_penalty:
+                    return False
         # 5.2 else: can directly compare reduced costs
         else:
             if self.cost > other.cost:
