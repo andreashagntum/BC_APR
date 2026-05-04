@@ -236,7 +236,7 @@ def get_solution(inst, no_gomory_cuts, branch_on_task_finish_times, use_dmp, tl_
             (node_sol, node_val, node_tours, count_labels, count_dom_labels, total_time, time_master, time_pricing,
              time_dominance, time_start_distr_calc, master_setup_time, nr_iterations_cg, initial_label_cnt,
              only_best_task_cnt) = cg.get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions,
-                                                             tl_b_and_p + tl_heur,
+                                                             tl_b_and_p,
                                                              earliest_finish_sums, no_gomory_cuts,
                                                              cores_per_thread, yuan_approach, solve_only_with_best_tasks,
                                                              best_task_cnt)
@@ -260,12 +260,11 @@ def get_solution(inst, no_gomory_cuts, branch_on_task_finish_times, use_dmp, tl_
                                                      time_start_distr_calc, only_best_task_cnt, cum_forbidden_tours)
 
 
-        # 2.3 if time limit has been reached: store total no. of (dominated) labels and runtime
+        # 2.3 if time limit has been reached: store total no. of (dominated) labels and continue
+        # Note: if this happens, the master problem will be solved heuristically right afterward
         except CG_timeout_exception as cg_e:
             solution.tot_labels += cg_e.tot_labels
             solution.tot_dom_labels += cg_e.tot_dom_labels
-            solution.cannot_solve_time = time.time() - start_time
-            return solution
 
         # 2.4 if all weights are integer: can round optimal value to the next possible objective value
         # (given by the maximum precision of the values for travel time probabilities)
