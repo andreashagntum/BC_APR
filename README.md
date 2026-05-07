@@ -3,8 +3,9 @@
 This repository contains the implementation of the Branch-Price-Cut-and-Switch (BPC&S)
 algorithm proposed in:
 
-> Andreas Hagn Rainer Kolisch, Giacomo Dall'Olio, Stefan Weltge (2026): *A Branch-Price-and-Cut Algorithm for Stochastic Workforce Scheduling
-> with Heterogeneous Worker Formations.*
+> Andreas Hagn Rainer Kolisch, Giacomo Dall'Olio, Stefan Weltge (2026): *A A Branch-Price-Cut-And-Switch Approach for
+> Optimizing Team Formation and Routing for Airport Baggage Handling Tasks with Stochastic Travel Times
+.*
 > arXiv preprint, DOI: [10.48550/arXiv.2405.20912](https://doi.org/10.48550/arXiv.2405.20912)
 
 The algorithm solves a team formation and routing problem arising in airport bagging handling systems. 
@@ -15,8 +16,8 @@ times are uncertain and time-dependent.
 If you use this code, please cite:
 ```bibtex
 @article{hagn2026bpcs,
-  title   = {A Branch-Price-and-Cut Algorithm for Stochastic Workforce Scheduling
-             with Heterogeneous Worker Formations},
+  title   = {A Branch-Price-Cut-And-Switch Approach for Optimizing Team Formation and Routing for Airport Baggage
+   Handling Tasks with Stochastic Travel Times},
   author  = {Hagn, Andreas; Kolisch, Rainer; Dall'Olio, Giacomo; Weltge, Stefan},
   journal = {arXiv preprint},
   year    = {2026},
