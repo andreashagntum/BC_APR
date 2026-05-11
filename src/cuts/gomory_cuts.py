@@ -128,9 +128,13 @@ def check_for_gomory_cuts_only_nonzero_light(node, opt_sol, workers_kt):
     # 2. initialize MIP to find cuts
     model = Model("Gomory Cuts")
     model.setParam("LogToConsole", False)
-    model.setParam("Method", 4)
+    model.setParam("Method", 1)
+    model.setParam("Threads", 1)
     model.setParam("ConcurrentMIP", 1)
-    model.setParam("TimeLimit", .3)
+    model.setParam("WorkLimit", .3)
+    # model.setParam("TimeLimit", .3)
+    model.setParam("Seed", 42069)
+
     w_pertub = eps_global / 100 # slightly perturb objective function to improve MIP performance
     precision = eps_gc_recalc       # set high precision to avoid rounding errors leading to infeasible cuts
 
@@ -176,10 +180,12 @@ def check_for_gomory_cuts_only_nonzero_light(node, opt_sol, workers_kt):
     obj = LinExpr()
     for tour_idx in selected_tours_idxs:
         obj += alpha[tour_idx] * opt_sol[tour_idx]
-    for task in u_task:
-        obj -= w_pertub*u_task[task]
-    for kt in u_kt:
-        obj -= w_pertub*u_kt[kt]
+    # slightly perturbate the objective to ensure results consistency across runs
+    for i, task in enumerate(sorted(u_task)):  # sorted = deterministic ordering
+        obj -= (w_pertub * (1 + i * 1e-6)) * u_task[task]
+
+    for i, kt in enumerate(sorted(u_kt)):
+        obj -= (w_pertub * (1 + i * 1e-6)) * u_kt[kt]
     obj -= alpha_zero
     model.setObjective(obj, GRB.MAXIMIZE)
 

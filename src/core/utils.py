@@ -111,7 +111,7 @@ def get_default_skill_comps(tours, inst):
 def store_solution_and_stats(solution, node, root, disaggr_infeas_solutions, node_sol, node_val, nodes_count, total_time,
                              master_setup_time, time_master, time_pricing, nr_iterations_cg, initial_label_cnt,
                              count_labels, count_dom_labels, time_dominance, time_start_distr_calc, only_best_task_cnt,
-                             cum_forbidden_tours):
+                             cum_forbidden_tours, runtime_exceeded):
     """After solving a node in the branching tree, stores all relevant information on solution progress, as well as the
     found solution.
 
@@ -156,7 +156,9 @@ def store_solution_and_stats(solution, node, root, disaggr_infeas_solutions, nod
         or considering all extensions (key False), respectively
     cum_forbidden_tours: int
         Total no. of tours that were forbidden at at least one node
-
+    runtime_exceeded: bool
+        Indicates if BPC&S runtime was exceeded during the last pricing step. If this is the case, node_sol is not
+        the optimal solution of the LP relaxation at node, and can thus not be used for lower bound computation
     Returns
     -------
     solution: GH_solution
@@ -184,7 +186,10 @@ def store_solution_and_stats(solution, node, root, disaggr_infeas_solutions, nod
     node.val = node_val
 
     if node == root:  # store relaxation LB at root node
-        solution.root_lb = node.val
+        if runtime_exceeded:
+            solution.root_lb = solution.get_min_value()
+        else:
+            solution.root_lb = node.val
         solution.time_root = total_time
 
     # 1.2.2 store several metrics regarding runtimes and problem size

@@ -79,8 +79,7 @@ def get_solution(inst, no_gomory_cuts, branch_on_task_finish_times, use_dmp, tl_
     # 1. preprocessing & preparations
     # 1.1 initialize solution metadata and Solution object
     cum_forbidden_tours = 0  # cumulated forbidden tours (derived via branching rule)
-    solution = GH_solution(
-        inst)  # Solution object, in which information regarding the solution is stored (obj. value etc.)
+    solution = GH_solution(inst)  # Solution object, in which information regarding the solution is stored (obj. value etc.)
     all_w_int = all_weights_int(inst)  # check if all weights are integer
 
     # 1.2 best objective value, solution status etc.
@@ -168,6 +167,7 @@ def get_solution(inst, no_gomory_cuts, branch_on_task_finish_times, use_dmp, tl_
     # 1.8 define root node
     root = GH_node(inst)
     root.is_root = True
+    root.lb = solution.get_min_value() # compute trivial LB for root node
     root.tours = init_tours
     # 1.8.1 Yuan et al. (2015) only use a DMP-equivalent formulation => set root.solve_as_dmp to True
     if yuan_approach:
@@ -231,40 +231,48 @@ def get_solution(inst, no_gomory_cuts, branch_on_task_finish_times, use_dmp, tl_
             node.update_lb(math.inf)
             continue
 
-        try:
-            # 2.2.2 solve model at current node of branching tree
-            (node_sol, node_val, node_tours, count_labels, count_dom_labels, total_time, time_master, time_pricing,
-             time_dominance, time_start_distr_calc, master_setup_time, nr_iterations_cg, initial_label_cnt,
-             only_best_task_cnt) = cg.get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions,
-                                                             tl_b_and_p,
-                                                             earliest_finish_sums, no_gomory_cuts,
-                                                             cores_per_thread, yuan_approach, solve_only_with_best_tasks,
-                                                             best_task_cnt)
+        # 2.2.2 solve model at current node of branching tree
+        (node_sol, node_val, node_tours, count_labels, count_dom_labels, total_time, time_master, time_pricing,
+         time_dominance, time_start_distr_calc, master_setup_time, nr_iterations_cg, initial_label_cnt,
+         only_best_task_cnt, runtime_exceeded) = cg.get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions,
+                                                         tl_b_and_p, elapsed_time,
+                                                         earliest_finish_sums, no_gomory_cuts,
+                                                         cores_per_thread, yuan_approach, solve_only_with_best_tasks,
+                                                         best_task_cnt)
 
-            # 2.2.3 sanity check if first tour in node.tours is fake tour
-            workers_available = {}
-            for k in inst.workers_w_d:
-                workers_available[k] = inst.workers_w_d[k]
-            for forced_tour in node.forced_tours:
-                for k in forced_tour.formation_w_d:
-                    workers_available[k] -= forced_tour.formation_w_d[k]
-            for k in workers_available:
-                if node.tours[0].formation_w_d[k] < workers_available[k]:
-                    raise Exception("First tour is not the fake tour.")
+        # 2.2.3 sanity check if first tour in node.tours is fake tour
+        workers_available = {}
+        for k in inst.workers_w_d:
+            workers_available[k] = inst.workers_w_d[k]
+        for forced_tour in node.forced_tours:
+            for k in forced_tour.formation_w_d:
+                workers_available[k] -= forced_tour.formation_w_d[k]
+        for k in workers_available:
+            if node.tours[0].formation_w_d[k] < workers_available[k]:
+                raise Exception("First tour is not the fake tour.")
 
-            # 2.2.4 store results in solution and node objects
-            solution, node, nodes_count, cum_forbidden_tours = store_solution_and_stats(solution, node, root,
-                                                    disaggr_infeas_solutions, node_sol, node_val, nodes_count, total_time,
-                                                     master_setup_time, time_master, time_pricing, nr_iterations_cg,
-                                                     initial_label_cnt, count_labels, count_dom_labels, time_dominance,
-                                                     time_start_distr_calc, only_best_task_cnt, cum_forbidden_tours)
+        # 2.2.4 store results in solution and node objects
+        solution, node, nodes_count, cum_forbidden_tours = store_solution_and_stats(solution, node, root,
+                                                disaggr_infeas_solutions, node_sol, node_val, nodes_count, total_time,
+                                                 master_setup_time, time_master, time_pricing, nr_iterations_cg,
+                                                 initial_label_cnt, count_labels, count_dom_labels, time_dominance,
+                                                 time_start_distr_calc, only_best_task_cnt, cum_forbidden_tours,
+                                                                                    runtime_exceeded)
 
 
         # 2.3 if time limit has been reached: store total no. of (dominated) labels and continue
         # Note: if this happens, the master problem will be solved heuristically right afterward
-        except CG_timeout_exception as cg_e:
-            solution.tot_labels += cg_e.tot_labels
-            solution.tot_dom_labels += cg_e.tot_dom_labels
+        if runtime_exceeded:
+            tree.insert(0, node)
+            # add tours to column pool
+            for i in range(1, len(node_tours)):  # start at index 1 to skip fake tour
+                tour = node_tours[i]
+                if tour.get_hash() not in all_tours_hashes:
+                    all_tours.append(tour)
+                    all_tours_hashes.append(tour.get_hash())
+            # skip rest of the loop: immediately solve heuristic master problem
+            continue
+
 
         # 2.4 if all weights are integer: can round optimal value to the next possible objective value
         # (given by the maximum precision of the values for travel time probabilities)

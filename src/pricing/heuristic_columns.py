@@ -109,6 +109,7 @@ def find_column_greedy(all_initial_labels, pricing_network, node_in_tree, mu, de
             # assign skill_comp to it
             curr_label.min_skill_comp_cnt = skill_comp_cnt
             curr_label.min_skill_comp = skill_comp
+            curr_label.cost = min(curr_label.cost_per_skill_comp.values())
             return curr_label
         # 2.4 else: sort all possible extensions w.r.t. reduced cost, pick the cheapest one as the new current label
         # and go to Step 2.1
@@ -264,6 +265,7 @@ def find_column_vnd(current_sol_tours, pricing_network, node_in_tree, forb_tour_
                             neg_label = curr_label.clone(node_in_tree)
                             neg_label.min_skill_comp_cnt = pricing_network.skill_comps_cnts_ids[skill_comp_cnt_id]
                             neg_label.min_skill_comp = pricing_network.skill_comps_ids[skill_comp_cnt_id]
+                            neg_label.cost = min(neg_label.cost_per_skill_comp.values())
                             neg_labels.append(neg_label)
 
         # 2.2 insert operators: logic analogous to delete operators
@@ -358,6 +360,7 @@ def find_column_vnd(current_sol_tours, pricing_network, node_in_tree, forb_tour_
                                 neg_label = curr_label.clone(node_in_tree)
                                 neg_label.min_skill_comp_cnt = pricing_network.skill_comps_cnts_ids[skill_comp_cnt_id]
                                 neg_label.min_skill_comp = pricing_network.skill_comps_ids[skill_comp_cnt_id]
+                                neg_label.cost = min(neg_label.cost_per_skill_comp.values())
                                 neg_labels.append(neg_label)
 
     # 3. postprocessing: remove duplicate labels
@@ -510,19 +513,25 @@ def find_columns_heuristics(pricing_networks, forbidden_tours_per_formation, mu,
                                       rho_gr, rho_le, psi, zeta_le,
                                       zeta_gr, t_max_le, t_max_gr, skill_comps_cnt[0], solve_as_dmp,
                                       yuan_approach, neg_heur_labels_per_formation[pricing_network.formation_id])
+
         # 2.3.1 add all negative columns
-        # Note: reduced cost negativitiy was already checked in find_column_vnd, so we don't check it again here
+        # Note: reduced cost negativity was already checked in find_column_vnd, so we don't check it again here
         if heur_labels != []:
             for label in heur_labels:
-
                 neg_heur_labels_per_formation[pricing_network.formation_id].append(label)
 
 
         # 2.4 create tour objects for all negative labels
+        ex_hashes = [tour.get_hash() for tour in node_in_tree.tours] # hashes of all already-existing tours
         for label in neg_heur_labels_per_formation[pricing_network.formation_id]:
             if label.cost < eps_col_neg / 10:
                 new_tour = pricing_network.build_tour(label, inst)
-                neg_tours.append(new_tour)
+                new_tour_hash = new_tour.get_hash()
+                # 2.4.1 skip label if its already present in the node's column pool or in the list of negative tours
+                # Note: this can happen due to floating point imprecision
+                if new_tour_hash not in ex_hashes:
+                    neg_tours.append(new_tour)
+                    ex_hashes.append(new_tour_hash)
 
 
     return neg_tours

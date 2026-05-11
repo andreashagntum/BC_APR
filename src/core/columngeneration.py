@@ -35,7 +35,7 @@ from config.config import *
 
 
 
-def get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions, tl, earliest_finish_sums,
+def get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions, tl, elapsed_time, earliest_finish_sums,
                            no_gomory_cuts, cores_per_thread, yuan_approach, solve_only_with_best_tasks,
                            best_task_cnt):
     """Solve LP relaxation via column generation. Proceeds as follows:
@@ -62,6 +62,8 @@ def get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions, tl,
         List of disaggregated infeasible solutions found so far
     tl: float
         Time limit of the algorithm (in seconds)
+    elapsed_time: float
+        Time spent in BPC&S routine (in seconds) prior to current function call
     earliest_finish_sums: float
             Minimum objective value that serves as a lower bound for the objective value of any feasible solution
             to the problem (computed using GH_solution.get_min_value())
@@ -89,7 +91,7 @@ def get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions, tl,
         Total no. of labels constructed in the current pricing step
     tot_dom_labels: int
         Total no. of dominated labels in the current pricing step
-    elapsed_time: float
+    total_time: float
         Total runtime spent to solve the current node
     tot_master_time: float
         Total runtime spent to solve the master problem at the current node
@@ -121,6 +123,7 @@ def get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions, tl,
         tour_hashes.append(tour.get_hash())
     # runtime of master/pricing problem and no. of column generation calls
     start_time = time.time()
+    runtime_exceeded = False # set to True once current CG step consumed more runtime than what is available for BPC&S
     tot_master_time = 0 # total runtime of master problem
     tot_pricing_time = 0    # total runtime of pricing
     nr_iterations_cg = 1    # no. of column generation calls
@@ -218,7 +221,7 @@ def get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions, tl,
     gomory_cut_rhs = None
     gomory_cuts_added = 0
 
-    while found_violated_cut:
+    while not runtime_exceeded and found_violated_cut:
         pricing_iter_cnt = 0 # tracks no. of times that all pricing subproblems have been solved in current fctn call (cycle breaker)
 
         # 2.3 add gomory cut if one has been found
@@ -233,8 +236,8 @@ def get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions, tl,
 
         # 2.5 if master problem is infeasible: return
         if not opt_sol:
-            elapsed_time = time.time() - start_time
-            return {}, math.inf, [], 0, 0, elapsed_time, tot_master_time, tot_pricing_time, tot_dominance_time, tot_start_distr_calc_time, \
+            total_time = time.time() - start_time
+            return {}, math.inf, [], 0, 0, total_time, tot_master_time, tot_pricing_time, tot_dominance_time, tot_start_distr_calc_time, \
                 master_model.master_setup_time, nr_iterations_cg, total_initial_label_cnt, total_best_task_cnt
 
         print(f"Current value of master problem: {opt_val + forced_cost} (net {opt_val + forced_cost - earliest_finish_sums})")
@@ -269,7 +272,7 @@ def get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions, tl,
         tot_dom_labels += count_dom_labels
 
         # 2.7 repeat until no more negative columns are found
-        while neg_tours:
+        while not runtime_exceeded and neg_tours:
             # 2.7.1 cycle breaker
             # Note: this can theoretically happen when reduced cost calculation is subject to (significant) numerical
             # errors. in our tests it did not happen, but we still keep it as a sanity check
@@ -279,11 +282,11 @@ def get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions, tl,
                     raise Exception("Pricing probably started cycling")
 
 
-            # 2.7.2 if runtime is exceeded: break and return
+            # 2.7.2 if BPC&S runtime is exceeded: break and return
             nr_iterations_cg += 1
-            elapsed_time = time.time() - start_time
-            if elapsed_time > tl:
-                raise CG_timeout_exception(tot_labels, tot_dom_labels)
+            total_time = time.time() - start_time
+            if total_time + elapsed_time > elapsed_time_buffer_factor * tl: # add slight buffer to allow algo. to finish solving the current node
+                runtime_exceeded = True
 
             # 2.7.3 add columns and include them into existing gomory cuts
             node.gomory_cuts_lhs = extend_gomory_cuts(neg_tours, node.gomory_cuts_lhs,  node.u_task, node.u_kt,
@@ -291,7 +294,7 @@ def get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions, tl,
             node.tours.extend(neg_tours)
             infeas_aggr_sol_sets, infeas_aggr_sol_superset = get_infeas_aggr_sol_sets(node, disaggr_infeas_solutions)
 
-            # 2.7.4 add columns to master problemand re-solve
+            # 2.7.4 add columns to master problem and re-solve
             master_model.add_tours(neg_tours, node.solve_as_dmp, node.gomory_cuts_lhs)
             opt_sol, opt_val, mu, delta, rho_gr, rho_le, psi, zeta_le, zeta_gr, time_master = master_model.optimize_master(return_duals = True)
             current_sol_tours = [node.tours[idx] for idx in opt_sol if opt_sol[idx] > eps_global]
@@ -391,9 +394,12 @@ def get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions, tl,
 
 
 
-    elapsed_time = time.time() - start_time
-    print(f"Found LB (from LP relaxation) of value {opt_val + forced_cost} "
-          f"(net {opt_val + forced_cost - earliest_finish_sums}) in {elapsed_time} s")
+    total_time = time.time() - start_time
+    if not runtime_exceeded:
+        print(f"Found LB (from LP relaxation) of value {opt_val + forced_cost} "
+              f"(net {opt_val + forced_cost - earliest_finish_sums}) in {total_time} s")
+    else:
+        print(f"Terminating node: BPC&S runtime exceeded. Continuing with solving the heuristic master problem...")
 
     # 3. parse solution
     cg_val = opt_val + forced_cost
@@ -412,9 +418,9 @@ def get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions, tl,
 
     print(f"No. of gomory cuts at node: {len(node.gomory_cuts_rhs)}")
 
-    return (cg_sol, cg_val, cg_tours, tot_labels, tot_dom_labels, elapsed_time, tot_master_time, tot_pricing_time,
+    return (cg_sol, cg_val, cg_tours, tot_labels, tot_dom_labels, total_time, tot_master_time, tot_pricing_time,
             tot_dominance_time, tot_start_distr_calc_time, master_model.master_setup_time, nr_iterations_cg,
-            total_initial_label_cnt, total_best_task_cnt)
+            total_initial_label_cnt, total_best_task_cnt, runtime_exceeded)
 
 
 

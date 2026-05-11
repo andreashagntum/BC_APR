@@ -1083,6 +1083,34 @@ class Label():
         cln.median_finish_per_task = self.median_finish_per_task.copy()
         return cln
 
+    def to_string(self):
+        """Convert label to a printable string. Similar to GH_tour.to_string()
+        """
+        str_out = "Formation-> "
+        for skill_level in self.formation:
+            str_out += "level " + str(skill_level) + ":" + str(self.formation[skill_level]) + " "
+        str_out += "\n"
+        if hasattr(self, "min_skill_comp_cnt"):
+            str_out += "Skill comp.: "
+            for sl_req in self.min_skill_comp_cnt:
+                if self.min_skill_comp_cnt[sl_req] > 0:
+                    str_out += str(sl_req) + "<-" + str(self.min_skill_comp_cnt[sl_req])
+                    str_out = str_out.rstrip(",")
+                    str_out += "; "
+            str_out = str_out.rstrip(";")
+            str_out += "\n"
+
+        for task in self.sequence[1:-1]:
+            str_out += "task" + str(task) + " [" + str(min(self.start_time_cdf_per_task[task].values())) + "," + str(
+                max(self.start_time_cdf_per_task[task].values())) + "[\n"
+        str_out += "leave time: " + str(self.start_time_from_depot) + ", (quantile) return time: " + str(self.quantile_case_finish) + "\n"
+        str_out += "tour cost: " + str(self.tour_cost) + "\n"
+        str_out += "reduced cost: " + str(self.cost)
+        str_out += "task reward: " + str(self.task_reward) + "\nbusy penalty: " + str(self.total_busy_penalty) + "\n"
+        str_out += "total gomory penalty: " + str(sum(self.gomory_penalty.values()))
+
+        return str_out
+
     def calculate_cdf(self, pmf):
         """Computes a cumulative distribution function (CDF) given a probability mass function (PMF).
 

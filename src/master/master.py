@@ -451,7 +451,7 @@ def solve_heuristic_master(inst, solution, all_tours, root, pricing_networks, cu
     # 8. if heuristic obj. val == best lower bound found: heuristic solution is optimal
     solution.tot_columns = len(all_tours)  # total no. of columns used
     solution.avg_forbidden_tours_per_node = cum_forbidden_tours / nodes_count
-    if hasattr(root, 'lb') and math.isclose(heur_val, root.lb, abs_tol=1e-07):
+    if math.isclose(heur_val, root.lb, abs_tol=1e-07):
         # store as optimal solution
         solution.add_optimal_solution(heur_sol, heur_val, heur_tours, elapsed_time, solution.root_lb)
     # else: store as heuristic (suboptimal) solution
