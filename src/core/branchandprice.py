@@ -110,8 +110,8 @@ def get_solution(inst, no_gomory_cuts, branch_on_task_finish_times, use_dmp, tl_
     # alpha chance-constraints are NOT checked. Thus, this functionality should ONLY be used for deterministic instances
     if warmstart:
         # 1.5.1 check if instance is deterministic
-        for time_bin in inst.travel_times:
-            max_tt_cnt = max([len(inst.travel_times[time_bin][k]) for k in inst.travel_times[time_bin]])
+        for time_bin in inst.travel_times_per_bin:
+            max_tt_cnt = max([len(inst.travel_times_per_bin[time_bin][k]) for k in inst.travel_times_per_bin[time_bin]])
             if max_tt_cnt > 1:
                 raise Exception("Warmstart only supported for deterministic instances.")
         if os.path.isfile(json_out_file):

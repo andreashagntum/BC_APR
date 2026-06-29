@@ -278,7 +278,7 @@ def get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions, tl,
             # errors. in our tests it did not happen, but we still keep it as a sanity check
             if len(node.gomory_cuts_lhs) > 0:
                 pricing_iter_cnt += 1
-                if pricing_iter_cnt > 100:
+                if pricing_iter_cnt > 10**4:
                     raise Exception("Pricing probably started cycling")
 
 
