@@ -34,7 +34,7 @@ import math
 from src.core import columngeneration as cg
 from src.utils.gh_tour import GH_tour
 from src.pricing.graph import PricingNetwork
-from src.core.columngeneration import CG_timeout_exception
+from src.pricing.utils import find_alpha_quantile_pmf
 from src.core.utils import *
 from src.branching.node_constructor import branch
 from src.master.master import solve_heuristic_master
@@ -620,11 +620,22 @@ def get_start_at_earliest_tours(inst):
             tour.worst_case_start_time[task] = inst.earliest_start[task]
             tour.quantile_finish_time[task] = finish_time
             # get earliest possible leave time
-            leave_time = min([t - max(inst.travel_times_per_bin[inst.bin_per_instant[t]][(inst.depot, task)])
-                          for t in range(inst.earliest_start[task], inst.latest_start[task] + 1)])
+            leave_time = min([t for t in range(inst.begin_horizon, inst.earliest_start[task]) if
+                              t + max(inst.travel_times_per_bin[inst.bin_per_instant[t]][(inst.depot, task)]) >= inst.earliest_start[task]] +
+                             [inst.earliest_start[task]])
             tour.leave_time = leave_time
-            tour.quantile_return_time = finish_time + max(inst.travel_times_per_bin[inst.bin_per_instant[finish_time]][(inst.depot, task)])
-            tour.quantile_finish_time["sink"] = tour.quantile_return_time
+
+            # compute quantile finish time per task (incl. quantile return time to depot)
+            tour.quantile_finish_time = {}
+            # 1. compute for task
+            time_bin = inst.bin_per_instant[tour.leave_time]
+            tt_quantile = find_alpha_quantile_pmf(inst.travel_times_per_bin[time_bin][(inst.depot, task)], inst.worker_quantile)
+            tour.quantile_finish_time[task] = max(tour.leave_time + tt_quantile, inst.earliest_start[task]) + inst.modes[task][formation_id]
+            # 2. compute for sink
+            time_bin = inst.bin_per_instant[tour.quantile_finish_time[task]]
+            tt_quantile = find_alpha_quantile_pmf(inst.travel_times_per_bin[time_bin][(task, inst.depot)], inst.worker_quantile)
+            tour.quantile_finish_time["sink"] = tour.quantile_finish_time[task] + tt_quantile
+            tour.quantile_return_time = tour.quantile_finish_time["sink"]
             tours.append(tour)
     return tours
 

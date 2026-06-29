@@ -1,6 +1,7 @@
 """This file contains several utility functions used during pricing.
 """
 import itertools
+from config.config import alpha_tol
 
 def get_all_skill_comps(inst, formation_id):
     """Get all possible skill compositions for a given formation.
@@ -119,7 +120,7 @@ def find_alpha_quantile(start_time_cdf, alpha):
     assert len(start_time_cdf) > 0 # can not compute quantiles for empty CDFs
 
     for k in reversed(start_time_cdf.keys()):
-        if start_time_cdf[k] <= alpha:
+        if start_time_cdf[k] <= alpha - alpha_tol:
             return k
     return k        # return first key if all values > alpha
 
@@ -144,7 +145,7 @@ def find_alpha_quantile_pmf(start_time_pmf, alpha):
     cumulative = 0.0
     for key in start_time_pmf:
         cumulative += start_time_pmf[key]
-        if cumulative >= alpha:
+        if cumulative >= alpha - alpha_tol:
             return key
 
     # fallback if PMF does not exactly sum to 1 (needed when alpha=1)

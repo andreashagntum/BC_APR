@@ -291,7 +291,7 @@ def perform_feasibility_check_extended(tours, workers_in):
     obj = LinExpr()
     for k in K:
         for j in S[i_0]:
-            obj += x_slack[(i_0, j, k)] * (1 + 1/(1000-2**k))        # slight pertubation to prefer solutions with workers of smaller skill levels
+            obj += x_slack[(i_0, j, k)] * (1 + 1/(1000-2**k))        # slight perturbation to prefer solutions with workers of smaller skill levels
     model.setObjective(obj, GRB.MINIMIZE)
 
     # 4. solve model and check if solution passes the feasibility check
@@ -311,6 +311,10 @@ def perform_feasibility_check_extended(tours, workers_in):
     # 5.1 get all nontrivial x/x_slack variables not entering the sink
     x_total = {}
     for (i,j,k) in x:
+        # 5.1.1 skip edges that enter the source or leave the sink: such arcs are created by the model, but never used
+        if i == "i_np1" or j == "i0":
+            continue
+        # 5.1.2 also skip edges that enter the sink
         if j != "i_np1":
             if x[(i,j,k)].X > eps_global or x_slack[(i,j,k)].X > eps_global:
                 if i == "i0":

@@ -114,7 +114,7 @@ def create_initial_labels(pricing_network, forb_tour_idxs, mu, delta, rho_gr, rh
             prob_reach_in_time = 0  # probability of reaching task node in time
             for tt in pricing_network.travel_times_per_bin[time_bin][(pricing_network.source, node)]:
                 prob_reach_in_time += pricing_network.travel_times_per_bin[time_bin][(pricing_network.source, node)][tt]
-                if prob_reach_in_time >= pricing_network.alpha:
+                if prob_reach_in_time >= pricing_network.alpha - alpha_tol:
                     latest_leave_time_per_bin = pricing_network.latest_starts[node] - tt      # latest leave time such that chance constraint satisfied at task node
                     break
 
@@ -1009,7 +1009,8 @@ class Label():
         self.latest_start_head = start_time_from_depot
         self.start_time_from_depot = start_time_from_depot  # time at which team leaves the depot
         self.formation = formation      # dict with keys = workers levels, values = no. of workers of specific skill level (without downgrading)
-        self.quantile_case_finish = start_time_from_depot  # worst-case finish time of last task, initially set to depot leave time
+        self.quantile_case_finish = start_time_from_depot  # quantile-case finish time of last task, initially set to depot leave time
+        self.quantile_case_finish_per_task = {}  # quantile-case finish time of all tasks
         self.median_finish = start_time_from_depot # median finish time of last task, can be used for reduced cost calculation and dominance checks
         self.median_finish_per_task = {} # used for construct GH_tour object from Label object later on
         self.length = 0     # length of route (excluding source/sink)
@@ -1067,6 +1068,7 @@ class Label():
         cln.unreachable_tasks_prob = self.unreachable_tasks_prob.copy()
         cln.formation = self.formation.copy()
         cln.quantile_case_finish = self.quantile_case_finish
+        cln.quantile_case_finish_per_task = self.quantile_case_finish_per_task.copy()
         cln.median_finish = self.median_finish
         cln.length = self.length
         cln.sequence = self.sequence.copy()
@@ -1216,7 +1218,7 @@ class Label():
             # and P(finishing > latest finish time w/ violation) = 0
             if max(latest_arrival_tail, earliest_start_tail) + execution_time_tail > latest_finish_viol_tail:
                 return {}, {}, False, "lf_viol_violated", "CC violated: max(latest_arrival, earliest_start) + execution_time > latest_finish_viol"
-            if max(latest_arrival_tail, earliest_start_tail) + execution_time_tail > latest_finish_tail and start_time_cdf_tail[latest_finish_tail-execution_time_tail] < alpha:
+            if max(latest_arrival_tail, earliest_start_tail) + execution_time_tail > latest_finish_tail and start_time_cdf_tail[latest_finish_tail-execution_time_tail] < alpha - alpha_tol:
                 return {}, {}, False, "chance_constr_violated", "CC violated: max(latest_arrival, earliest_start) + execution_time > latest_finish AND start_time_cdf[latest_finish-execution_time] < alpha"
             if latest_finish_tail-execution_time_tail in start_time_cdf_tail:
                 self.tw_viol_prob[task] = 1 - start_time_cdf_tail[latest_finish_tail-execution_time_tail]
@@ -1235,6 +1237,7 @@ class Label():
 
         # 5. update Label attributes
         self.quantile_case_finish = max(self.quantile_case_finish + quantile_dist, earliest_start_tail) + execution_time_tail
+        self.quantile_case_finish_per_task[task] = self.quantile_case_finish
         self.median_finish = find_alpha_quantile(start_time_cdf_tail, 0.5) + execution_time_tail
         self.median_finish_per_task[task] = self.median_finish
         self.earliest_start_head = max(earliest_arrival_tail, earliest_start_tail)
@@ -1420,6 +1423,7 @@ class Label():
 
             # 2.3 set other necessary attribute values
             ext.quantile_case_finish = t_to
+            ext.quantile_case_finish_per_task[ext_task] = t_to
             ext.tasks.append(ext_task)
 
             # 2.4 skip extension if arc is forbidden
