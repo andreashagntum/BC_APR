@@ -48,6 +48,7 @@ import bisect
 from src.pricing.utils import get_all_skill_comps, find_alpha_quantile_pmf
 from src.utils.gh_tour import GH_tour
 from src.pricing.dynamic_programming import spprc_algorithm
+from config.config import alpha_tol
 
 class PricingNetwork():
     """Pricing network for a given profile. Non time-expanded version."""
@@ -228,7 +229,7 @@ class PricingNetwork():
                         start_time_cdf_j[t] = sum([start_time_pmf_j[t2] for t2 in start_time_pmf_j if t2 <= t])
                     start_time_cdf_j = list(start_time_cdf_j.items())
                     # 3.1.2.2 get quantile and check if quantile > latest_start[task_j]
-                    alpha_quantile_idx = bisect.bisect(start_time_cdf_j, self.alpha, key = lambda x: x[1])
+                    alpha_quantile_idx = bisect.bisect(start_time_cdf_j, self.alpha - alpha_tol, key = lambda x: x[1])
                     if start_time_cdf_j[alpha_quantile_idx][0] > inst.latest_start[task_j]:
                         satisfies_chance_constr_per_bin[(finish_time_i, time_bin)] = False
                     # 3.1.2.3 check if latest_start_viol[task_j] is violated when i is finished as early as possible
