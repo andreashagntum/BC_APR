@@ -179,27 +179,10 @@ def get_solution(inst, no_gomory_cuts, branch_on_task_finish_times, use_dmp, tl_
     nodes_count = 0
     node_hashes = []
 
-    # 1.10 maximum precision for travel time values in input data, used to properly round objective values
-    # Note: this feature has a negligible impact on performance in Hagn et al. (2026), but depending on the instance
-    # characteristics, it might be helpful for other instance sets
-    maximum_input_precision = 0
-    for bin in inst.travel_times_per_bin:
-        for tup in inst.travel_times_per_bin[bin]:
-            for travel_time in inst.travel_times_per_bin[bin][tup]:
-                floating_digits = 0
-                dist_prob = inst.travel_times_per_bin[bin][tup][travel_time]
-                while True:
-                    dist_prob_rounded = round(dist_prob, floating_digits)
-                    if abs(dist_prob_rounded - dist_prob) < 0.1 ** 10:
-                        if maximum_input_precision < floating_digits:
-                            maximum_input_precision = floating_digits
-                        break
-                    floating_digits += 1
-
-    # 1.11 compute lower bound for the objective value
+    # 1.10 compute lower bound for the objective value
     earliest_finish_sums = solution.get_min_value()
 
-    # 1.12 once-setup pricing networks
+    # 1.11 once-setup pricing networks
     pricing_networks = {}  # store pricing networks to avoid re-creation at each node/CG step
     for formation_id in inst.formations:
         pricing_networks[formation_id] = PricingNetwork(inst, formation_id)
@@ -274,20 +257,13 @@ def get_solution(inst, no_gomory_cuts, branch_on_task_finish_times, use_dmp, tl_
             continue
 
 
-        # 2.4 if all weights are integer: can round optimal value to the next possible objective value
-        # (given by the maximum precision of the values for travel time probabilities)
-        if all_w_int:
-            if not node_val == math.inf:
-                node_val = round(node_val, maximum_input_precision)
-
-
-        # 2.5 check if current node is infeasible
+        # 2.4 check if current node is infeasible
         if not node_sol or node_sol[0] > eps_global: # fake tour (index 0) used => node must be infeasible
             print("Node number " + str(nodes_count) + " is infeasible")
             node.update_lb(math.inf)
             continue
 
-        # 2.6 else: update lower bound at node, add new tours found during column generation to all_tours
+        # 2.5 else: update lower bound at node, add new tours found during column generation to all_tours
         else:
             node.own_lb = node_val  # store LB of current node (node.lb is updated whenever a better LB is found in a child node)            node.update_lb(node_val)
             node.update_lb(node_val)
@@ -297,9 +273,9 @@ def get_solution(inst, no_gomory_cuts, branch_on_task_finish_times, use_dmp, tl_
                     all_tours.append(tour)
                     all_tours_hashes.append(tour.get_hash())
 
-        # 2.7 if solution is integer: check feasibility and update upper bounds if necessary
+        # 2.6 if solution is integer: check feasibility and update upper bounds if necessary
         if is_sol_integer(node_sol):
-            # 2.7.1 check if solution is better than best integer solution previously found
+            # 2.6.1 check if solution is better than best integer solution previously found
             if node_val < curr_best_int_value:
                 (solution, tree, node, curr_best_int_value, curr_best_int_solution,
                  curr_best_tours) = check_integer_sol(node, node_tours, inst, solution, node_sol, node_val, tree,
@@ -307,12 +283,12 @@ def get_solution(inst, no_gomory_cuts, branch_on_task_finish_times, use_dmp, tl_
                                                       curr_best_tours, use_dmp)
 
 
-        # 2.8 else: branch on current solution
+        # 2.7 else: branch on current solution
         else:
-            # 2.8.1 if solution worse than best integer feasible solution: can not be optimal => prune branch
+            # 2.7.1 if solution worse than best integer feasible solution: can not be optimal => prune branch
             if node_val >= curr_best_int_value:
                 print("Node pruned")
-            # 2.8.2 else: branch
+            # 2.7.2 else: branch
             else:
                 node, tree, solution, node_hashes = branch(node, node_tours, solution, node_sol, tree, node_hashes,
                                                            branch_on_task_finish_times, yuan_approach)
@@ -590,8 +566,11 @@ def get_fake_tour(inst):
     return fake_tour
         
 def get_start_at_earliest_tours(inst):
-    """Generates single-task tours for each possible combination of tasks and suitable profiles. Task is assumed
-    to be finished at its earliest possible finish time.
+    """Generates single-task tours for each possible combination of tasks and suitable profiles.
+    Primarily searches for the tour with latest leave time that guarantees an execution before or at the task's earliest
+    start.
+    If this is not possible, it falls back to the tour with the earliest leave time that yields a worst-case start
+    time > task's earliest tasks.
     These tours are used to initialize the column set at the beginning of the algorithm.
 
     Parameters
@@ -608,30 +587,55 @@ def get_start_at_earliest_tours(inst):
     tours = []
     for formation_id in inst.tasks_per_formation:
         for task in inst.tasks_per_formation[formation_id]:
-            finish_time = inst.earliest_start[task] + inst.modes[task][formation_id]
-
             tour = GH_tour(inst.formations_w_d[formation_id], formation_id)
             tour.is_initial_tour = True
             tour.tw_viol_prob[task] = 0
             tour = get_default_skill_comps([tour], inst)[0]
             tour.tasks = [task]
-            tour.cost = finish_time * inst.weights[task]        # best-case finish time is always within task's time window
-            
-            tour.worst_case_start_time[task] = inst.earliest_start[task]
-            tour.quantile_finish_time[task] = finish_time
-            # get earliest possible leave time
-            leave_time = min([t for t in range(inst.begin_horizon, inst.earliest_start[task]) if
-                              t + max(inst.travel_times_per_bin[inst.bin_per_instant[t]][(inst.depot, task)]) >= inst.earliest_start[task]] +
-                             [inst.earliest_start[task]])
+            # 1. Get latest possible leave time that guarantees timely arrival before or at task's earliest start
+            early_arrival_t = [t for t in range(inst.begin_horizon, inst.earliest_start[task] + 1) if
+                               t + max(inst.travel_times_per_bin[inst.bin_per_instant[t]][(inst.depot, task)])
+                               <= inst.earliest_start[task]]
+            # 1.1 If at least one such time instant exists: get the largest one
+            if early_arrival_t:
+                leave_time = max(early_arrival_t)
+            # 1.2 Else: get the earliest leave time that yields a worst-case start time > earliest start
+            else:
+                late_arrival_t = [t for t in range(inst.begin_horizon, inst.earliest_start[task] + 1) if
+                                  t + max(inst.travel_times_per_bin[inst.bin_per_instant[t]][(inst.depot, task)])
+                                  > inst.earliest_start[task]] + [inst.earliest_start[task]]
+                leave_time = min(late_arrival_t)
+
+            # 2. compute start time PMF
+            start_time_pmf = {leave_time + t: inst.travel_times_per_bin[inst.bin_per_instant[leave_time]][(inst.depot, task)][t] for t in
+                              inst.travel_times_per_bin[inst.bin_per_instant[leave_time]][(inst.depot, task)]} # this is an arrival time distr. at this point
+            early_arrivals = [t for t in start_time_pmf if t < inst.earliest_start[task]]
+            if early_arrivals:
+                if inst.earliest_start[task] not in start_time_pmf:
+                    start_time_pmf[inst.earliest_start[task]] = 0
+                for t in early_arrivals:
+                    start_time_pmf[inst.earliest_start[task]] += start_time_pmf[t]
+                    del start_time_pmf[t]
+
+            # 3. Compute and store cost and other start-and finish-time related attributes
+            cost = sum([start_time_pmf[t] * (t + inst.modes[task][formation_id]) for t in start_time_pmf])
+            for t in start_time_pmf:
+                # 3.1 Penalty for late finishes (very unlikely, but possible)
+                if t + inst.modes[task][formation_id] > inst.latest_finish[task]:
+                    cost += start_time_pmf[t] * (t + inst.modes[task][formation_id] - inst.latest_finish[task]) ** 2
+            cost *= inst.weights[task]
+            tour.cost = cost
+
+            # 4. Store other time-related values
+            tour.worst_case_start_time[task] = max(start_time_pmf)
             tour.leave_time = leave_time
 
-            # compute quantile finish time per task (incl. quantile return time to depot)
-            tour.quantile_finish_time = {}
-            # 1. compute for task
+            # 5. Compute quantile finish time per task (incl. quantile return time to depot)
+            # 5.1 compute for task
             time_bin = inst.bin_per_instant[tour.leave_time]
             tt_quantile = find_alpha_quantile_pmf(inst.travel_times_per_bin[time_bin][(inst.depot, task)], inst.worker_quantile)
             tour.quantile_finish_time[task] = max(tour.leave_time + tt_quantile, inst.earliest_start[task]) + inst.modes[task][formation_id]
-            # 2. compute for sink
+            # 5.2 compute for sink
             time_bin = inst.bin_per_instant[tour.quantile_finish_time[task]]
             tt_quantile = find_alpha_quantile_pmf(inst.travel_times_per_bin[time_bin][(task, inst.depot)], inst.worker_quantile)
             tour.quantile_finish_time["sink"] = tour.quantile_finish_time[task] + tt_quantile
