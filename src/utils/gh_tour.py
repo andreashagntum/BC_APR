@@ -65,6 +65,11 @@ class GH_tour():
         str_hash: str
             Customized string-formatted hash that encompasses all information that uniquely defines a tour
         """
+        # workaround for fake tour: get trivial fake hash
+        if self.is_fake_tour:
+            return "faketour"
+
+        # else: compute hash based on tour characteristics
         str_hash = ''
         for skill_level in self.formation_w_d:
             str_hash += str(skill_level) + ":" + str(self.formation_w_d[skill_level]) + ","
@@ -88,6 +93,11 @@ class GH_tour():
             Customized string-formatted hash that encompasses all information that uniquely defines a tour (excl.
             its skill composition)
         """
+        # workaround for fake tour: get trivial fake hash
+        if self.is_fake_tour:
+            return "faketour"
+
+        # else: compute hash based on tour characteristics
         # generate string hash of tour without considering skill composition
         str_hash = ''
         for skill_level in self.formation_w_d:

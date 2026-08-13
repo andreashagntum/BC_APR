@@ -85,7 +85,7 @@ class PricingNetwork():
         self.arcs[self.sink] = []
         self.resources = {}
         self.tasks = []
-        self.workers = inst.workers # workers per skill level w/o downgrading, needed for busy cost calculation
+        self.workers = inst.workers # workers per skill level and time instant w/o downgrading, needed for busy cost calculation
         self.reachability = {}  # keys: nodes, values: all tasks that are reachable from node within their time window
         self.auto_reachability = {}  # keys: nodes i, values: all tasks through which i is re-reachable within its time window, only needed for properly removing/adding forced tasks
         self.poss_starts = {}

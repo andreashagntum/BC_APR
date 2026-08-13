@@ -92,8 +92,12 @@ class Master_model():
                 for t in workers_kt[k]:
                     workers_cons = LinExpr()
                     for i in indices:  # indices = list of tour indices (0,...,len(tours)-1)
-                        if t in list(range(tours[i].leave_time, tours[i].quantile_return_time)) and k in tours[i].skill_comp_cnt:
-                            workers_cons -= tours[i].skill_comp_cnt[k] * self.lbda[i]
+                        # treat fake tour separately, as it has no skill_comp_cnt information stored
+                        if tours[i].is_fake_tour:
+                            workers_cons -= workers_kt[k][t] * self.lbda[i]
+                        else:
+                            if t in list(range(tours[i].leave_time, tours[i].quantile_return_time)) and k in tours[i].skill_comp_cnt:
+                                workers_cons -= tours[i].skill_comp_cnt[k] * self.lbda[i]
                     self.workers_constraints[(k, t)] = self.model.addConstr(workers_cons >= -workers_kt[k][t],
                                                                             "level_" + str(k) + "_instant_" + str(t))
 
@@ -102,8 +106,12 @@ class Master_model():
                 for t in workers_kt[k]:
                     workers_cons = LinExpr()
                     for i in indices:   # indices = list of tour indices (0,...,len(tours)-1)
-                        if t in list(range(tours[i].leave_time, tours[i].quantile_return_time)) and k in tours[i].formation_w_d:
-                            workers_cons -= tours[i].formation_w_d[k]*self.lbda[i]
+                        # treat fake tour separately, as it has no formation_w_d information stored
+                        if tours[i].is_fake_tour:
+                            workers_cons -= workers_kt[k][t] * self.lbda[i]
+                        else:
+                            if t in list(range(tours[i].leave_time, tours[i].quantile_return_time)) and k in tours[i].formation_w_d:
+                                workers_cons -= tours[i].formation_w_d[k]*self.lbda[i]
                     self.workers_constraints[(k,t)] = self.model.addConstr(workers_cons >= -workers_kt[k][t] ,
                                                                            "level_"+ str(k) + "_instant_" + str(t))
         
@@ -415,7 +423,7 @@ def solve_heuristic_master(inst, solution, all_tours, root, pricing_networks, cu
     for k in root.inst.skill_levels:
         workers_kt[k] = {}
         for t in root.inst.instants:
-            workers_kt[k][t] = root.inst.workers[k]
+            workers_kt[k][t] = root.inst.workers[k][t]
     print("solving heuristic master problem.")
     heur_model = Master_model(inst.tasks, heur_tours, list(range(len(heur_tours))), workers_kt,
                                      {}, {}, [], [], GRB.BINARY, True, [], [], cores_per_thread)

@@ -143,7 +143,7 @@ def get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions, tl,
         for k in node.inst.skill_levels:
             workers_kt[k] = {}
             for t in node.inst.instants:
-                workers_kt[k][t] = node.inst.workers[k]
+                workers_kt[k][t] = node.inst.workers[k][t]
         for forced_tour in node.forced_tours:  # remove forced tasks from unforced_tasks and subtract required workers from all available workers
             for forced_task in forced_tour.tasks:
                 unforced_tasks.remove(forced_task)
@@ -159,7 +159,7 @@ def get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions, tl,
             for k in node.inst.skill_levels:
                 workers_kt_gc[k] = {}
                 for t in node.inst.instants:
-                    workers_kt_gc[k][t] = node.inst.workers_w_d[k]
+                    workers_kt_gc[k][t] = node.inst.workers_w_d[k][t]
             if len(node.forced_tours) > 0:
                 raise Exception(f"Found {len(node.forced_tours)} forced tours at the root node DMP formulation.")
     # 1.3.2 else: only compute worker availability
@@ -168,7 +168,7 @@ def get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions, tl,
         for k in node.inst.skill_levels:
             workers_kt[k] = {}
             for t in node.inst.instants:
-                workers_kt[k][t] = node.inst.workers_w_d[k]
+                workers_kt[k][t] = node.inst.workers_w_d[k][t]
         for forced_tour in node.forced_tours:   # remove forced tasks from unforced_tasks and subtract required workers from all available workers
             for forced_task in forced_tour.tasks:
                 unforced_tasks.remove(forced_task)

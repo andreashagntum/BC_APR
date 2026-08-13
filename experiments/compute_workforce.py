@@ -3,7 +3,7 @@ Computes the minimum and maximum workforce for a given instance. Afterwards, res
 workforce strength rs. For additional details, see the function docstrings.
 """
 
-def compute_workforce_rs(inst, rs, normalize_workforce = False, inst_wf = None):
+def compute_workforce_rs(inst, travel_times_per_bin, rs, normalize_workforce = False, inst_wf = None):
     """Computes the workforce for a given instance inst and a workforce strength rs.
     Proceeds as follows:
     - computes a minimum and maximum workforce size using get_min_workforce and get_max_workforce
@@ -19,6 +19,8 @@ def compute_workforce_rs(inst, rs, normalize_workforce = False, inst_wf = None):
     ----------
     inst: instance_loader.Instance
         Contains all necessary instance data read from input files.
+    travel_times_per_bin: dict
+        Maps time bins and edges to their distribution of probabilities
     rs: float in [0,1]
         Workforce strength relative to the no. of workers required to trivially solve the instance.
     normalize_workforce: bool
@@ -32,7 +34,7 @@ def compute_workforce_rs(inst, rs, normalize_workforce = False, inst_wf = None):
     -------
     inst: instance_loader.Instance
         Input Instance object with update attributes inst.workers and inst.workers_w_d (maps skill levels to the number
-        of available workers without and with downgrading, respectively).
+        of available workers without and with downgrading, respectively, per time instant).
     """
 
     # 1. specify which dataframe should be used for min./max. workforce size computation and compute workforce size
@@ -40,10 +42,10 @@ def compute_workforce_rs(inst, rs, normalize_workforce = False, inst_wf = None):
     if normalize_workforce:
         assert inst_wf is not None
         w_min = get_min_workforce(inst_wf)
-        w_max = get_max_workforce(inst_wf)
+        w_max = get_max_workforce(inst_wf, travel_times_per_bin)
     else:
         w_min = get_min_workforce(inst)
-        w_max = get_max_workforce(inst)
+        w_max = get_max_workforce(inst, travel_times_per_bin)
 
     # 2. scale workforce size with rs to get actual workforce size
     workers = {}
@@ -58,12 +60,15 @@ def compute_workforce_rs(inst, rs, normalize_workforce = False, inst_wf = None):
             w_w_d += workers[kk]
         inst.workers_w_d[skill_level] = w_w_d
 
+    # 4. Convert workers data to time-dependent dict
+    inst.workers = {k: {t: workers[k] for t in range(inst.begin_horizon, inst.end_horizon + 1)} for k in workers}
+    inst.workers_w_d = {k: {t: inst.workers_w_d[k] for t in range(inst.begin_horizon, inst.end_horizon + 1)} for k in inst.workers_w_d}
 
     return inst
 
 
 
-def get_max_workforce(inst):
+def get_max_workforce(inst, travel_times_per_bin):
     """Calculate maximum workforce size such that a given instance inst is feasible.
     Given the fastest execution mode for each task and its earliest start time, computes the total required workforce
     per time instant. For each skill level, the workforce size is then given as the maximum workforce requirement
@@ -73,6 +78,8 @@ def get_max_workforce(inst):
     ----------
     inst: instance_loader.Instance
         Contains all necessary instance data read from input files.
+    travel_times_per_bin: dict
+        Maps time bins and edges to their distribution of probabilities
 
     Returns
     -------
@@ -96,7 +103,7 @@ def get_max_workforce(inst):
     # started as early possible
     for task in inst.tasks:
         # calculate min. travel time for which service level constraint is satisfied
-        distance = max([max(inst.travel_times_per_bin[time_bin][(task, inst.depot)]) for time_bin in inst.travel_times_per_bin])
+        distance = max([max(travel_times_per_bin[time_bin][(task, inst.depot)]) for time_bin in travel_times_per_bin])
 
         leave_time = inst.earliest_start[task] - distance
         return_time = inst.earliest_finish[task] + distance

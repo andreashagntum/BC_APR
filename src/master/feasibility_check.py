@@ -104,20 +104,28 @@ def is_sol_actually_feasible_extended(node_sol, node_tours, workers, forbidden_t
     new_skill_comps = {}
     new_skill_comps_cnts = {}
     for i in range(len(tours)):
-        tour = node_tours[i]
-        new_skill_comps[i] = {}
-        new_skill_comps_cnts[i] = {}
-        for k in tour.skill_comp:
-            new_skill_comps[i][k] = {}
-            new_skill_comps_cnts[i][k] = 0
-            for kk in tour.skill_comp[k]:
-                new_skill_comps[i][k][kk] = 0
+        tour = tours[i]
+        if not tour.is_fake_tour:
+            new_skill_comps[i] = {}
+            new_skill_comps_cnts[i] = {}
+            for k in tour.skill_comp:
+                new_skill_comps[i][k] = {}
+                new_skill_comps_cnts[i][k] = 0
+                for kk in tour.skill_comp[k]:
+                    new_skill_comps[i][k][kk] = 0
+        else:
+            new_skill_comps[i] = "s_fake"
+            new_skill_comps_cnts[i] = "s_fake"
 
     # 2.3 sort x w.r.t. skill level
     x = sorted(x.items(), key = lambda x: x[0][2])
 
     # 2.4 get new skill compositions and skill composition counts based on x values
-    for ((i, j, k),x_val) in x:
+    for ((i, j, k), x_val) in x:
+        # Skip computation for fake tour: if fake tour is part of the solution, instance will terminate as infeasible anyway.
+        # If it is not, we do not care about its skill composition because it's not part of the (possibly optimal) solution
+        if tours[j].is_fake_tour:
+            continue
         lower_skill_levels = [kk for kk in formations[j] if kk <= k]
         workers_left_to_distribute = x_val
         for kk in lower_skill_levels:   # downgrade as little as possible
@@ -272,20 +280,21 @@ def perform_feasibility_check_extended(tours, workers_in):
             flow_conservation_constraint_slack[(i, k)] = model.addLConstr(flow_conservation_cons_slack == 0,
                                                                     'flow_conservation_slack')
 
-    # 2.3 workforce constraints at origin/destination
+    # 2.3 Create one source workforce constraint for each time instant: the no. of workers of level k leaving the depot up
+    # until time t must not exceed workers[k][t]
+    instants = list(workers_in[min(workers_in)].keys())
     for k in K:
-        source_cons = LinExpr()
-        sink_cons = LinExpr()
-        origin_cons_slack = LinExpr()
-        for j in S[i_0]:
-            source_cons += x[(i_0, j, k)]
-            origin_cons_slack += x_slack[(i_0, j, k)]
-        for j in P[i_np1]:
-            sink_cons += x[(j, i_np1, k)]
-            origin_cons_slack -= x_slack[(j, i_np1, k)]
-        source_constraint[k] = model.addLConstr(source_cons == workers[k], "source_cons_" + str(k))
-        sink_constraint[k] = model.addLConstr(sink_cons == workers[k], "sink_cons_" + str(k))
-        origin_constraint_slack[k] = model.addLConstr(origin_cons_slack == 0, "origin_slack_" + str(k))
+        for t in instants:
+            source_cons = LinExpr()
+            for j in S[i_0]:
+                if j == i_np1: # sink node treated separately: always counts to the workforce constraint
+                    source_cons += x[(i_0, j, k)]
+                else: # else: check if tour already left at or before t
+                    if tours[int(j)].leave_time <= t:
+                        source_cons += x[(i_0, j, k)]
+
+            source_constraint[(k, t)] = model.addLConstr(source_cons <= workers[k][t], "source_cons_" + str(k))
+
 
     # 3. set objective function
     obj = LinExpr()

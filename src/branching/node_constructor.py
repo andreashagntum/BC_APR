@@ -316,19 +316,8 @@ def generate_children_b_on_variable(node, fixed_tour, fixed_tour_idx):
     left_child = node.clone()
     right_child = node.clone()
 
-    # 3.1 for left child node: adjust workforce requirements of fake tour to ensure feasibility
-    fake_tour_curr_node = left_child.tours[0]  # index of fake tour in left node
-    fake_tour_curr_node.formation_id = "f_"
-    for k in fixed_tour.formation_w_d:
-        fake_tour_curr_node.formation_w_d[k] -= fixed_tour.formation_w_d[k]
-        fake_tour_curr_node.formation_id += f"{k}:{fake_tour_curr_node.formation_w_d[k]},"
-    fake_tour_curr_node.formation_id = fake_tour_curr_node.formation_id.rstrip(",")
-    for k in fixed_tour.skill_comp:
-        fake_tour_curr_node.skill_comp_cnt[k] -= fixed_tour.skill_comp_cnt[k]
-        for kk in fixed_tour.skill_comp[k]:
-            fake_tour_curr_node.skill_comp[k][kk] -= fixed_tour.skill_comp[k][kk]
 
-    # 3.2 remove fixed_tour from list of available tours at child nodes
+    # 3.1 remove fixed_tour from list of available tours at child nodes
     for tour in left_child.tours:
         if tour.get_hash() == fixed_tour.get_hash():
             tour_left_child_to_remove = tour
@@ -361,7 +350,7 @@ def generate_children_b_on_variable(node, fixed_tour, fixed_tour_idx):
     # 3.3.1 get all incompatible tours and their indices
     for idx in range(len(left_child.tours)):
         tour = left_child.tours[idx]
-        if not is_tour_suitable_for_left_child(tour, forced_tasks) and not tour == fake_tour_curr_node:
+        if not is_tour_suitable_for_left_child(tour, forced_tasks) and not tour == left_child.tours[0]: # fake tour always at index 0
             incompatible_tours_left.append(tour)
             incompatible_tour_idxs_left.append(idx)
     # 3.3.1 remove incompatible tours

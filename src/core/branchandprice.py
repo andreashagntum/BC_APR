@@ -75,6 +75,9 @@ def get_solution(inst, no_gomory_cuts, branch_on_task_finish_times, use_dmp, tl_
     solution: GH_solution
         Solution object containing the best integer solution found alongside some statistics
     """
+    # 0. Immediately terminate if no tasks are present
+    if not inst.tasks:
+        return None
 
     # 1. preprocessing & preparations
     # 1.1 initialize solution metadata and Solution object
@@ -224,15 +227,8 @@ def get_solution(inst, no_gomory_cuts, branch_on_task_finish_times, use_dmp, tl_
                                                          best_task_cnt)
 
         # 2.2.3 sanity check if first tour in node.tours is fake tour
-        workers_available = {}
-        for k in inst.workers_w_d:
-            workers_available[k] = inst.workers_w_d[k]
-        for forced_tour in node.forced_tours:
-            for k in forced_tour.formation_w_d:
-                workers_available[k] -= forced_tour.formation_w_d[k]
-        for k in workers_available:
-            if node.tours[0].formation_w_d[k] < workers_available[k]:
-                raise Exception("First tour is not the fake tour.")
+        if not node.tours[0].is_fake_tour:
+            raise Exception("First tour is not the fake tour.")
 
         # 2.2.4 store results in solution and node objects
         solution, node, nodes_count, cum_forbidden_tours = store_solution_and_stats(solution, node, root,
@@ -516,8 +512,8 @@ def get_fake_tour(inst):
     fake_formation_w_d = {}
     fake_formation_id = "f_"
     for level in inst.skill_levels:
-        fake_formation_w_d[level] = inst.workers_w_d[level]
-        fake_formation_id +=  f"{level}:{inst.workers[level]},"
+        fake_formation_w_d[level] = "fake"
+        fake_formation_id +=  f"fake"
     fake_formation_id = fake_formation_id.rstrip(",")
 
     # 2. create GH_tour object including all tasks, each finished at their latest finish time
@@ -545,18 +541,8 @@ def get_fake_tour(inst):
         fake_tour.quantile_finish_time[task] = inst.latest_finish_viol[task]
 
     # 5. set fake skill composition
-    skill_comp = {}
-    skill_comp_cnt = {}
-    for k in inst.workers:
-        skill_comp_cnt[k] = inst.workers[k]
-        skill_comp[k] = {}
-        for kk in inst.workers:
-            if kk < k:
-                continue
-            if kk == k:
-                skill_comp[k][kk] = inst.workers[k]
-            else:
-                skill_comp[k][kk] = 0
+    skill_comp = "s_fake"
+    skill_comp_cnt = "s_fake"
     fake_tour.skill_comp = skill_comp
     fake_tour.skill_comp_cnt = skill_comp_cnt
     fake_tour.formation_id = fake_formation_id
@@ -985,6 +971,21 @@ class GH_solution():
             optimal.relative_net_value = 0
         else:
             optimal.relative_net_value = (opt_val - self.get_min_value()) / self.get_max_net_cost()
+
+        # 5. Add worker usage information based on quantile return times
+        self.workers_used = {}
+        for tour_idx in opt_sol:
+            if opt_sol[tour_idx] > 1 - eps_global:
+                tour = opt_tours[tour_idx]
+                for k in tour.skill_comp_cnt:
+                    if k not in self.workers_used:
+                        self.workers_used[k] = {}
+                    for t in range(tour.leave_time, tour.quantile_return_time):
+                        if t not in self.workers_used[k]:
+                            self.workers_used[k][t] = 0
+                        self.workers_used[k][t] += tour.skill_comp_cnt[k]
+
+
         self.optimal = optimal
         
     def add_heuristic_solution(self, heur_sol, heur_val, heur_tours, lower_bound, elapsed_time, root_lb):
@@ -1040,20 +1041,32 @@ class GH_solution():
             heuristic.optimality_gap = 1 - (lower_bound - self.get_min_value()) / (heur_val - self.get_min_value())
         self.heuristic = heuristic
 
+        # 6. Add worker usage information based on quantile return times
+        self.workers_used = {}
+        for tour_idx in heur_sol:
+            if heur_sol[tour_idx] > 1 - eps_global:
+                tour = heur_tours[tour_idx]
+                for k in tour.skill_comp_cnt:
+                    if k not in self.workers_used:
+                        self.workers_used[k] = {}
+                    for t in range(tour.leave_time, tour.quantile_return_time):
+                        if t not in self.workers_used[k]:
+                            self.workers_used[k][t] = 0
+                        self.workers_used[k][t] += tour.skill_comp_cnt[k]
+
+
 
     def to_string(self):
         """Format solution information to string that can be printed. Contains all logged statistics, as well as a summary
         of all tours that make up the best disaggregated-feasible integer solution found.
         """
 
-        tot_workers = 0
-        for k in self.inst.workers:
-            tot_workers += self.inst.workers[k]
-        
+        tot_workers = max([sum([self.inst.workers[k][t] for k in self.inst.workers]) for t in self.inst.instants])
+
         s = ""
         s+= "Number of tasks: " + str(len(self.inst.tasks)) + "\n"
         s+= "Actual number of instants: " + str(len(self.inst.instants)) + "\n"
-        s+= "Total number of workers: " +  str(tot_workers) + "\n"
+        s+= "Maximum total number of workers available any time instant: " +  str(tot_workers) + "\n"
         for k in self.inst.workers:
             s += "Workers level "+ str(k) + ": " + str(self.inst.workers[k]) + "\n"
         s+= "Number of explored nodes: " + str(self.explored_nodes) + "\n"

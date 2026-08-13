@@ -79,7 +79,7 @@ def get_all_skill_comps(inst, formation_id):
         is_feasible = True
         for k in workers_per_level:
             # 4.1 for each skill level k: comp. needs at most inst.workers[k] many workers w/ skill level k
-            if workers_per_level[k] > inst.workers[k]:
+            if workers_per_level[k] > max(inst.workers[k].values()): # if available workers suffice for any t, we create the skill comp
                 is_feasible = False
                 break
             # 4.2 need to exactly satisfy the required workforce per skill level
