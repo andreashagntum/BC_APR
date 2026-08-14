@@ -105,74 +105,80 @@ def create_initial_labels(pricing_network, forb_tour_idxs, mu, delta, rho_gr, rh
 
     # 2. for each node in the pricing network: compute its initial labels
     for node in node_labels:
-        resources_arc = pricing_network.resources[pricing_network.source, node]
-        # 2.1 get latest leave time that can potentially lead to a feasible label (i.e., a label that satisfies the chance
-        # constraint and time windows)
-        latest_leave_time = -1
-        for time_bin in pricing_network.travel_times_per_bin:
-            # 2.1.1 get alpha-quantile for travel time in current bin
-            prob_reach_in_time = 0  # probability of reaching task node in time
-            for tt in pricing_network.travel_times_per_bin[time_bin][(pricing_network.source, node)]:
-                prob_reach_in_time += pricing_network.travel_times_per_bin[time_bin][(pricing_network.source, node)][tt]
-                if prob_reach_in_time >= pricing_network.alpha - alpha_tol:
-                    latest_leave_time_per_bin = pricing_network.latest_starts[node] - tt      # latest leave time such that chance constraint satisfied at task node
-                    break
-
-            # 2.1.2 update latest leave time for current bin to ensure TW satisfaction
-            latest_leave_time_per_bin = min(latest_leave_time_per_bin, pricing_network.latest_starts_viol[node] -
-                                        pricing_network.max_travel_times_per_bin[time_bin][pricing_network.source, node])
-
-            # 2.1.3 if latest leave time is before time bin: current time bin will always lead to chance constraint/TW violations => continue with next bin
-            if latest_leave_time_per_bin < pricing_network.instant_per_bin[time_bin][0]:
+        # Get list of potential leave times
+        # If task is from an active tour: leave time is fixed
+        if node in pricing_network.active_tasks:
+            # If task is from an active tour, but not the first task: skip it
+            if node not in pricing_network.first_active_tasks:
                 continue
+            # Else: get true leave time of corresponding tour
+            potential_leave_times = [pricing_network.leave_time_per_first_active_task[node]]
+        else:
+        # 2.1 get latest leave time that can potentially lead to a feasible label (i.e., a label that satisfies the chance
+            latest_leave_time = -1
+            for time_bin in pricing_network.travel_times_per_bin:
+                # 2.1.1.1 get alpha-quantile for travel time in current bin
+                prob_reach_in_time = 0  # probability of reaching task node in time
+                for tt in pricing_network.travel_times_per_bin[time_bin][(pricing_network.source, node)]:
+                    prob_reach_in_time += pricing_network.travel_times_per_bin[time_bin][(pricing_network.source, node)][tt]
+                    if prob_reach_in_time >= pricing_network.alpha - alpha_tol:
+                        latest_leave_time_per_bin = pricing_network.latest_starts[node] - tt      # latest leave time such that chance constraint satisfied at task node
+                        break
 
-            # 2.1.4 if latest leave time is contained in bin: update latest leave time
-            if latest_leave_time_per_bin <= pricing_network.instant_per_bin[time_bin][-1]:
-                latest_leave_time = max(latest_leave_time, latest_leave_time_per_bin)
+                # 2.1.1.2 update latest leave time for current bin to ensure TW satisfaction
+                latest_leave_time_per_bin = min(latest_leave_time_per_bin, pricing_network.latest_starts_viol[node] -
+                                            pricing_network.max_travel_times_per_bin[time_bin][pricing_network.source, node])
 
-            # 2.1.5 if latest leave time is after time bin: update latest leave time to the end of the bin
-            else:
-                latest_leave_time = max(latest_leave_time, pricing_network.instant_per_bin[time_bin][-1])
+                # 2.1.1.3 if latest leave time is before time bin: current time bin will always lead to chance constraint/TW violations => continue with next bin
+                if latest_leave_time_per_bin < pricing_network.instant_per_bin[time_bin][0]:
+                    continue
 
+                # 2.1.1.4 if latest leave time is contained in bin: update latest leave time
+                if latest_leave_time_per_bin <= pricing_network.instant_per_bin[time_bin][-1]:
+                    latest_leave_time = max(latest_leave_time, latest_leave_time_per_bin)
 
-
-        # 2.2 get lower bound on earliest leave time assuming no waiting
-        # note: for time-dependant travel times, waiting can be an efficient decision because one can avoid worse
-        # travel time distributions in the subsequent bin
-        max_travel_time = max([pricing_network.max_travel_times_per_bin[time_bin][(pricing_network.source, node)] for time_bin in
-                        pricing_network.max_travel_times_per_bin])
-        earliest_leave_no_waiting = pricing_network.earliest_starts[node] - max_travel_time
-
-        # 2.3 get all bins between earliest leave time w/o waiting and latest leave time
-        bins_no_waiting = [b for b in range(pricing_network.bin_per_instant[earliest_leave_no_waiting],
-                                            pricing_network.bin_per_instant[latest_leave_time] + 1)]
-
-        # 2.3 get list of potential leave times
-        # 2.3.1 check each instant in the relevant bins
-        potential_leave_times = []
-        found_earliest_start_no_waiting = False # true iff. a leave time was found, with which the task is started at its earliest start and no waiting is incurred
-        max_leave_time_with_waiting_time = 0 # latest leave time that would imply waiting (and thus guarantees starting at earliest start)
-        for time_bin in bins_no_waiting:
-            for t in pricing_network.instant_per_bin[time_bin]:
-                latest_arrival_time = t + pricing_network.max_travel_times_per_bin[time_bin][(pricing_network.source, node)]
-                # if leaving at t incurs no waiting at task and does not violate LF^v: always add it to potential leave times
-                if latest_arrival_time > pricing_network.earliest_starts[node]:
-                    if latest_arrival_time <= pricing_network.latest_starts_viol[node]:
-                        potential_leave_times.append(t)
-                # if leaving at t implies task is started at its earliest start: remember this
-                elif latest_arrival_time == pricing_network.earliest_starts[node]:
-                    potential_leave_times.append(t)
-                    found_earliest_start_no_waiting = True
-                # else: remember leave time as candidate for earliest leave that guarantees start at earliest start
+                # 2.1.1.5 if latest leave time is after time bin: update latest leave time to the end of the bin
                 else:
-                    max_leave_time_with_waiting_time = max(max_leave_time_with_waiting_time, t)
-        # 2.3.2 if no time instant was found that ensures starting at earliest start: also add latest potential leave time
-        # that guarantees a start at earliest start
-        if not found_earliest_start_no_waiting:
-            potential_leave_times.insert(0, max_leave_time_with_waiting_time)
+                    latest_leave_time = max(latest_leave_time, pricing_network.instant_per_bin[time_bin][-1])
 
+
+                # 2.1.2 get lower bound on earliest leave time assuming no waiting
+                # note: for time-dependant travel times, waiting can be an efficient decision because one can avoid worse
+                # travel time distributions in the subsequent bin
+                max_travel_time = max([pricing_network.max_travel_times_per_bin[time_bin][(pricing_network.source, node)] for time_bin in
+                                pricing_network.max_travel_times_per_bin])
+                earliest_leave_no_waiting = pricing_network.earliest_starts[node] - max_travel_time
+
+                # 2.3 get all bins between earliest leave time w/o waiting and latest leave time
+                bins_no_waiting = [b for b in range(pricing_network.bin_per_instant[earliest_leave_no_waiting],
+                                                    pricing_network.bin_per_instant[latest_leave_time] + 1)]
+
+            # 2.3 get list of potential leave times
+            # 2.3.1 check each instant in the relevant bins
+            potential_leave_times = []
+            found_earliest_start_no_waiting = False # true iff. a leave time was found, with which the task is started at its earliest start and no waiting is incurred
+            max_leave_time_with_waiting_time = 0 # latest leave time that would imply waiting (and thus guarantees starting at earliest start)
+            for time_bin in bins_no_waiting:
+                for t in pricing_network.instant_per_bin[time_bin]:
+                    latest_arrival_time = t + pricing_network.max_travel_times_per_bin[time_bin][(pricing_network.source, node)]
+                    # if leaving at t incurs no waiting at task and does not violate LF^v: always add it to potential leave times
+                    if latest_arrival_time > pricing_network.earliest_starts[node]:
+                        if latest_arrival_time <= pricing_network.latest_starts_viol[node]:
+                            potential_leave_times.append(t)
+                    # if leaving at t implies task is started at its earliest start: remember this
+                    elif latest_arrival_time == pricing_network.earliest_starts[node]:
+                        potential_leave_times.append(t)
+                        found_earliest_start_no_waiting = True
+                    # else: remember leave time as candidate for earliest leave that guarantees start at earliest start
+                    else:
+                        max_leave_time_with_waiting_time = max(max_leave_time_with_waiting_time, t)
+            # 2.3.2 if no time instant was found that ensures starting at earliest start: also add latest potential leave time
+            # that guarantees a start at earliest start
+            if not found_earliest_start_no_waiting:
+                potential_leave_times.insert(0, max_leave_time_with_waiting_time)
 
         # 2.4 Create labels for each possible depot leave time
+        resources_arc = pricing_network.resources[pricing_network.source, node]
         for t in potential_leave_times:
             # note: waiting might be an optimal decision when time bins are used. if time bins are not used or only a
             # single time bin exists, one can safely prune any time instants t that would incur waiting time
@@ -612,8 +618,26 @@ def spprc_algorithm(pricing_network, forb_tour_idxs, forb_skill_comps, mu, delta
             if not yuan_approach:
                 min_label, min_cost, tour_cost, min_cost_all = find_best_label(node_labels[pricing_network.sink], pricing_network)
                 if min_label is not None:
-                    min_label.min_skill_comp = pricing_network.default_comp
-                    min_label.min_skill_comp_cnt = pricing_network.default_comp_cnt
+                    # if label contains an active tour: skill composition is forced by previous segment's solution
+                    if set(min_label.sequence).intersection(set(pricing_network.active_tasks)):
+                        # sanity check: check if active tasks are executed in the correct sequence
+                        if (min_label.sequence[1:len(pricing_network.sequence_per_active_task[min_label.sequence[1]]) + 1] !=
+                                pricing_network.sequence_per_active_task[min_label.sequence[1]]):
+                            raise Exception("min. label starts with active task, but does not follow the sequence induced"
+                                            "by the tour from the previous segment.\n"
+                                            f"label sequence: {min_label.sequence}.\n"
+                                            f"sequences from tour of previous segment: {pricing_network.sequence_per_active_task[min_label.sequence[1]]}.\n"
+                                            f"last edge in graph: {(min_label.sequence[-2], min_label.sequence[-1]) in pricing_network.graph.edges}")
+                        min_label.min_skill_comp = pricing_network.skill_comp_per_active_tour[min_label.sequence[1]]
+                        min_label.min_skill_comp_cnt = pricing_network.skill_comp_cnt_per_active_tour[min_label.sequence[1]]
+
+                        min_label.skill_comp_frozen = True
+                    # else: use default skill comp
+                    else:
+                        min_label.min_skill_comp = pricing_network.default_comp
+                        min_label.min_skill_comp_cnt = pricing_network.default_comp_cnt
+                        min_label.skill_comp_frozen = False
+
                     min_label = [min_label]
                 else:
                     min_label = []
@@ -626,7 +650,7 @@ def spprc_algorithm(pricing_network, forb_tour_idxs, forb_skill_comps, mu, delta
                         label.min_skill_comp = pricing_network.default_comp
                         label.min_skill_comp_cnt = pricing_network.default_comp_cnt
 
-        # 2.4 if node is solved using the AMP: also find best composition for all labels at sink
+        # 2.4 if node is solved using the DMP: also find best composition for all labels at sink
         else:
             no_of_sink_labels = len(node_labels[pricing_network.sink])
             min_label, min_cost, tour_cost, min_cost_all = find_best_label_skill_comp(node_labels[pricing_network.sink],
@@ -898,6 +922,7 @@ def find_best_label_skill_comp(sink_labels, pricing_network, delta, skill_comps,
     min_label = None
     min_skill_comp = None
     min_skill_comp_cnt = None
+    min_label_contains_active_tour = False
     # 2. check each label and get optimal skill composition w.r.t reduced costs
     for i in range(len(sink_labels)):
         sink_label = sink_labels[i]
@@ -906,6 +931,7 @@ def find_best_label_skill_comp(sink_labels, pricing_network, delta, skill_comps,
         min_skill_comp_sink_label = None
         min_skill_comp_cnt_sink_label = None
         min_cost_sink_label = math.inf
+        contains_active_tour = False
 
         # 2.1 get cost of 1 worker of any skill level
         t_from = sink_label.start_time_from_depot
@@ -914,10 +940,21 @@ def find_best_label_skill_comp(sink_labels, pricing_network, delta, skill_comps,
         for k in pricing_network.workers:
             skill_comp_cnt = {k: 1}
             cost_per_worker[k] = get_busy_penalty(pricing_network.formation, delta, t_from, t_to, skill_comp_cnt, True)
+        # 2.2 get suitable skill comps: for tours containing an active tour, this equals the skill comp. induced by the
+        # active tour
+        if set(sink_label.sequence).intersection(set(pricing_network.active_tasks)):
+            # quick sanity check
+            if (sink_label.sequence[1:len(pricing_network.sequence_per_active_task[sink_label.sequence[1]]) + 1] !=
+                    pricing_network.sequence_per_active_task[sink_label.sequence[1]]):
+                raise Exception("min. label starts with active task, but does not follow the sequence induced"
+                                "by the tour from the previous segment")
+            suitable_skill_comps = [(pricing_network.skill_comp_per_active_tour[sink_label.sequence[1]],
+                                     pricing_network.skill_comp_cnt_per_active_tour[sink_label.sequence[1]])]
+            contains_active_tour = True
+        else:
+            suitable_skill_comps = [(skill_comps[j], skill_comps_cnt[j]) for j in range(len(skill_comps))]
         # 2.2 for each skill comp: calculate reduced costs of tour and update optimal skill comp. if necessary
-        for j in range(len(skill_comps)):
-            skill_comp = skill_comps[j]
-            skill_comp_cnt = skill_comps_cnt[j]
+        for (skill_comp, skill_comp_cnt) in suitable_skill_comps:
             # skip skill comps. that would lead to a forbidden tour
             if skill_comp in forbidden_skill_comps_per_sink_label[i]:
                 continue
@@ -940,6 +977,7 @@ def find_best_label_skill_comp(sink_labels, pricing_network, delta, skill_comps,
                 tour_cost = sink_label.tour_cost
                 min_skill_comp = min_skill_comp_sink_label
                 min_skill_comp_cnt = min_skill_comp_cnt_sink_label
+                min_label_contains_active_tour = contains_active_tour
                 min_label_index = i
         # 2.3 if label has duplicate tasks: update list of task resources in case the network needs to be re-solved
         else:
@@ -952,6 +990,10 @@ def find_best_label_skill_comp(sink_labels, pricing_network, delta, skill_comps,
     if min_label is not None:
         min_label.min_skill_comp = min_skill_comp
         min_label.min_skill_comp_cnt = min_skill_comp_cnt
+        if min_label_contains_active_tour:
+            min_label.skill_comp_frozen = True
+        else:
+            min_label.skill_comp_frozen = False
 
     return [min_label],  min_cost, tour_cost, min_cost_all
 

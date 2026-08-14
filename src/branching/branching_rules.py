@@ -10,7 +10,7 @@ import math
 from numpy import std, median, mean
 from config.config import *
 
-def find_most_std_frac_task_finish_time_alt(node_sol, node_tours):
+def find_most_std_frac_task_finish_time_alt(node_sol, node_tours, inst):
     """Finds a) the task i such that the no. of distinct finish times of task i of fractional tours is maximal (1st criteria)
     and the std. of finish times of task i of fractional tours covering i is largest (2nd criteria) and
     b) the median worst case finish time of all fractional tours covering task i.
@@ -24,6 +24,8 @@ def find_most_std_frac_task_finish_time_alt(node_sol, node_tours):
         Maps tour indices to their lambda value
     node_tours: list
         Corresponding list of GH_tour objects
+    inst: instance_loader.Instance
+        Contains all necessary instance data read from input files. This function only uses inst.tasks_from_prev_segs.
 
     Returns
     -------
@@ -47,6 +49,9 @@ def find_most_std_frac_task_finish_time_alt(node_sol, node_tours):
         if not idx == 0 and node_sol[idx] > eps_global / 100 and node_sol[idx] < 1 - eps_global / 100: # select all tours with fractional lambda value (except fake tour)
             tour = node_tours[idx]
             for task in tour.tasks:
+                # skip tasks from previous segments: their finish time is implicitly fixed
+                if task in inst.tasks_from_prev_segs:
+                    continue
                 quantile_finish_time = node_tours[idx].quantile_finish_time[task]
                 if task not in finish_times:
                     tours_per_task[task] = []

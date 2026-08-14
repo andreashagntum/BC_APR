@@ -135,7 +135,16 @@ def is_sol_actually_feasible_extended(node_sol, node_tours, workers, forbidden_t
                 new_skill_comps_cnts[j][k] += min(delta, workers_left_to_distribute)
                 workers_left_to_distribute -= min(delta, workers_left_to_distribute)
 
-    # 2.5 filter out any tours that could be converted to forbidden or forced tours if their skill compositions are changed
+    # 2.5 For tours that contain and active tour from prior segment: skill composition remains unchanged
+    # Sanity-check against computed skill comp cnt (skill comp might change, but that doesn't matter)
+    for i in idx_map:
+        if node_tours[idx_map[i]].skill_comp_frozen:
+            assert new_skill_comps_cnts[i] == node_tours[idx_map[i]].skill_comp_cnt
+            new_skill_comps[i] = node_tours[idx_map[i]].skill_comp
+            new_skill_comps_cnts[i] = node_tours[idx_map[i]].skill_comp_cnt
+
+
+    # 2.6 filter out any tours that could be converted to forbidden or forced tours if their skill compositions are changed
     for tour in forbidden_tours:
         indexes_to_remove = []
         forb_tour_hash = tour.get_hash_no_comp()
@@ -145,7 +154,7 @@ def is_sol_actually_feasible_extended(node_sol, node_tours, workers, forbidden_t
         for i in indexes_to_remove:
             del idx_map[i]
 
-    # 2.6 map new skill comps. and skill comp cnts. to node_tours
+    # 2.7 map new skill comps. and skill comp cnts. to node_tours
     # only done when current node is not a DMP node, as DMP nodes already have suitable skill comps.
     if not solve_as_dmp:
         cnt = 0
@@ -211,12 +220,17 @@ def perform_feasibility_check_extended(tours, workers_in):
 
     # 1.2 get worker demand of each tour
     demand_w_d = {}     # keys: indices of tours, values: dicts with worker demand per skill level (with downgrading)
+    demand = {}         # keys: indices of tours, values: dicts with worker demand per skill level (without downgrading), only needed for active tours
     for r in J:
         demand_w_d[r] = {}
+        demand[r] = {}
         for k in K:
             demand_w_d[r][k] = 0
+            demand[r][k] = 0
         for k in tours[int(r)].formation_w_d:
             demand_w_d[r][k] = tours[int(r)].formation_w_d[k]
+        for k in tours[int(r)].skill_comp_cnt:
+            demand[r][k] = tours[int(r)].skill_comp_cnt[k]
 
     # 1.3 get successors and predecessors of each tour
     S = {}      # keys: indices of tours, values: list of successor tours
@@ -248,21 +262,29 @@ def perform_feasibility_check_extended(tours, workers_in):
 
     # 2. set model constraints
     demand_met_constraint = {}  # worker demand met
+    skill_comp_demand_met_constraint = {}  # worker demand met for tours with frozen skill comps. (tours containing active tours from prior segments)
     flow_conservation_constraint = {}   # outflow of workers = inflow of workers per skill level
     flow_conservation_constraint_slack = {}   # outflow of workers = inflow of workers per skill level (only counting external workers)
     source_constraint = {}      # all workers leave (and return to) the depot
-    sink_constraint = {}
-    origin_constraint_slack = {}
 
     # 2.1 workforce demand constraints
     for j in J:
         for k in K:
-            demand_met_cons = LinExpr()
-            for i in P[j]:
-                for kk in list(filter(lambda x: x >= k, K)):
-                    demand_met_cons += x[(i, j, kk)] + x_slack[(i, j, kk)]
-            demand_met_constraint[(j, k)] = model.addLConstr(demand_met_cons >= demand_w_d[j][k],
-                                                             f'demand_met_tour{j}_level{k}')
+            # for tours with frozen skill compositions: need to enforce the exact skill composition
+            if tours[int(j)].skill_comp_frozen:
+                demand_met_cons = LinExpr()
+                for i in P[j]:
+                    demand_met_cons += x[(i, j, k)] + x_slack[(i, j, k)]
+                skill_comp_demand_met_constraint[(j, k)] = model.addLConstr(demand_met_cons == demand[j][k],
+                                                                            f"skill_comp_demand_met_tour{j}_level{k}")
+            # for all other tours: add demand constraint with downgrading instead
+            else:
+                demand_met_cons = LinExpr()
+                for i in P[j]:
+                    for kk in list(filter(lambda x: x >= k, K)):
+                        demand_met_cons += x[(i, j, kk)] + x_slack[(i, j, kk)]
+                demand_met_constraint[(j, k)] = model.addLConstr(demand_met_cons >= demand_w_d[j][k],
+                                                                 f'demand_met_tour{j}_level{k}')
 
     # 2.2 worker flow conservation
     for i in J:

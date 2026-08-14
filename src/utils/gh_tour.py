@@ -21,9 +21,11 @@ class GH_tour():
         self.quantile_return_time = -1
         self.worst_case_return_time = -1
         self.tour_cost = math.inf  # sum of weighted expected finish times
+        self.task_cost_dict =  {}  # maps tasks to their expected costs
         self.tw_viol_prob = {}
         self.is_initial_tour = False  # True iff. tour is one of the tours created at algorithm initialization (i.e. not generated via CG)
         self.is_fake_tour = False
+        self.skill_comp_frozen = False # True iff. tour contains an active tour from the previous segment
 
     def __hash__(self):
         """Hash only used to enable usage of GH_tour objects as dict keys. For object comparisons, get_hash(), get_seq_hash(),
@@ -50,7 +52,10 @@ class GH_tour():
         copy.worst_case_return_time = self.worst_case_return_time
         copy.tour_cost = self.tour_cost
         copy.cost = self.cost
+        copy.task_cost_dict = self.task_cost_dict.copy()
         copy.tw_viol_prob = self.tw_viol_prob.copy()
+        copy.skill_comp_cnt = self.skill_comp_cnt.copy()
+        copy.skill_comp = {k: self.skill_comp[k].copy() for k in self.skill_comp}
         # copy.worst_case_finish_time = self.worst_case_finish_time.copy()
         # copy.start_time_cdf_per_task = self.start_time_cdf_per_task.copy()
         return copy

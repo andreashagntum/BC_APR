@@ -76,7 +76,7 @@ def solve_pricing(inst, pricing_networks, mu, delta, rho_gr, rho_le, psi, zeta_l
     total_initial_label_cnt: int
         Total no. of initial labels constructed
     """
-    # 1. Intialization
+    # 1. Initialization
     # 1.1 results logging for label and column counts
     tot_labels = 0
     tot_dom_labels = 0 # only dominated labels

@@ -74,7 +74,7 @@ def branch(node, node_tours, solution, node_sol, tree, node_hashes, branch_on_ta
         # 2.1 branch on task finish times
         if branch_on_task_finish_times:
             task, t_tilde, tours_to_remove, tour_idxs_to_remove = find_most_std_frac_task_finish_time_alt(
-                node_sol, node_tours)
+                node_sol, node_tours, node.inst)
         else:
             task = None
         # 2.2 if nontrivial branch was found: branch

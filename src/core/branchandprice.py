@@ -573,6 +573,9 @@ def get_start_at_earliest_tours(inst):
     tours = []
     for formation_id in inst.tasks_per_formation:
         for task in inst.tasks_per_formation[formation_id]:
+            # Skip active tasks: their current tour will be appended to tours at the end of this function
+            if task in inst.tasks_from_prev_segs:
+                continue
             tour = GH_tour(inst.formations_w_d[formation_id], formation_id)
             tour.is_initial_tour = True
             tour.tw_viol_prob[task] = 0
@@ -611,6 +614,7 @@ def get_start_at_earliest_tours(inst):
                     cost += start_time_pmf[t] * (t + inst.modes[task][formation_id] - inst.latest_finish[task]) ** 2
             cost *= inst.weights[task]
             tour.cost = cost
+            tour.task_cost_dict[task] = cost
 
             # 4. Store other time-related values
             tour.worst_case_start_time[task] = max(start_time_pmf)
@@ -627,6 +631,12 @@ def get_start_at_earliest_tours(inst):
             tour.quantile_finish_time["sink"] = tour.quantile_finish_time[task] + tt_quantile
             tour.quantile_return_time = tour.quantile_finish_time["sink"]
             tours.append(tour)
+
+    # deepcopy tours from previous segment and store
+    for tour in inst.tours_from_prev_segs:
+        tour_c = copy.deepcopy(tour)
+        tours.append(tour_c)
+
     return tours
 
 
@@ -985,6 +995,14 @@ class GH_solution():
                             self.workers_used[k][t] = 0
                         self.workers_used[k][t] += tour.skill_comp_cnt[k]
 
+        # 6. add net task costs to each tour and each task
+        for tour_idx in opt_sol:
+            if opt_sol[tour_idx] > 1 - eps_global:
+                tour = opt_tours[tour_idx]
+                tour.net_task_cost_dict = {}
+                for task in tour.task_cost_dict:
+                    tour.net_task_cost_dict[task] = tour.task_cost_dict[task] - self.inst.weights[task] * self.inst.earliest_finish[task]
+                    assert tour.net_task_cost_dict[task] >= 0
 
         self.optimal = optimal
         
@@ -1054,6 +1072,14 @@ class GH_solution():
                             self.workers_used[k][t] = 0
                         self.workers_used[k][t] += tour.skill_comp_cnt[k]
 
+        # 7. add net task costs to each tour and each task
+        for tour_idx in heur_sol:
+            if heur_sol[tour_idx] > 1 - eps_global:
+                tour = heur_tours[tour_idx]
+                tour.net_task_cost_dict = {}
+                for task in tour.task_cost_dict:
+                    tour.net_task_cost_dict[task] = tour.task_cost_dict[task] - self.inst.weights[task] * self.inst.earliest_finish[task]
+                    assert tour.net_task_cost_dict[task] >= 0
 
 
     def to_string(self):

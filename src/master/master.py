@@ -412,11 +412,15 @@ def solve_heuristic_master(inst, solution, all_tours, root, pricing_networks, cu
     # 4.2 generate all possible tours
     heur_tours = []
     for tour in all_tours:
-        for i in range(len(skill_comps_per_formation[tour.formation_id])):
-            new_tour = tour.copy()
-            new_tour.skill_comp = skill_comps_per_formation[tour.formation_id][i]
-            new_tour.skill_comp_cnt = skill_comps_cnts_per_formation[tour.formation_id][i]
-            heur_tours.append(new_tour)
+        if not tour.skill_comp_frozen:
+            for i in range(len(skill_comps_per_formation[tour.formation_id])):
+                new_tour = tour.copy()
+                new_tour.skill_comp = skill_comps_per_formation[tour.formation_id][i]
+                new_tour.skill_comp_cnt = skill_comps_cnts_per_formation[tour.formation_id][i]
+                heur_tours.append(new_tour)
+        # if skill comp is frozen: tour contains and active tour from previous segment => freeze skill comp.
+        else:
+            heur_tours.append(tour.copy())
 
     # 5. setup and solve heuristic master problem to integrality
     workers_kt = {}  # workers without downgrading for each instant t

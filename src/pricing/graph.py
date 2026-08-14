@@ -139,8 +139,20 @@ class PricingNetwork():
         self.calculate_start_distr_time = 0
 
         # 0. preprocessing
-        # 0.1 copy travel_times from inst.depot to tasks to travel_times from self.source/self.sink to tasks for easier value retrieving
-        for task in inst.tasks_per_formation_with_domination[formation_id]:
+        # 0.1 get active tours, their first/last tasks, and skill comps.
+        active_tours_per_formation = [tour for tour in inst.tours_from_prev_segs if tour.formation_id == formation_id]
+        active_tasks_per_formation = [task for tour in active_tours_per_formation for task in tour.active_tasks]
+        first_active_tasks = [tour.active_tasks[0] for tour in active_tours_per_formation]
+        last_active_tasks = [tour.active_tasks[-1] for tour in active_tours_per_formation]
+        self.active_tasks = active_tasks_per_formation
+        self.first_active_tasks = first_active_tasks
+        self.leave_time_per_first_active_task = {tour.active_tasks[0]: tour.leave_time for tour in active_tours_per_formation}
+        self.skill_comp_cnt_per_active_tour = {tour.active_tasks[0]: tour.skill_comp_cnt for tour in active_tours_per_formation}
+        self.skill_comp_per_active_tour = {tour.active_tasks[0]: tour.skill_comp for tour in active_tours_per_formation}
+        self.sequence_per_active_task = {tour.active_tasks[0]: tour.active_tasks for tour in active_tours_per_formation}
+
+        # 0.2 copy travel_times from inst.depot to tasks to travel_times from self.source/self.sink to tasks for easier value retrieving
+        for task in inst.tasks_per_formation_with_domination[formation_id] + active_tasks_per_formation:
             self.tasks.append(task)
             for time_bin in self.travel_times_per_bin:
                 self.travel_times_per_bin[time_bin][(self.source, task)] = {i: 0 for i in range(min(inst.travel_times_per_bin[time_bin][(inst.depot, task)]),
@@ -151,7 +163,7 @@ class PricingNetwork():
                 self.travel_times_per_bin[time_bin][(task, self.sink)] = self.travel_times_per_bin[time_bin][(task, self.source)]
                 self.travel_times_per_bin[time_bin][(self.sink, task)] = self.travel_times_per_bin[time_bin][(self.source, task)]
 
-        # 0.2 get min./max./quantile travel_times between pairs of nodes/source/sink
+        # 0.3 get min./max./quantile travel_times between pairs of nodes/source/sink
         # because these values are needed frequently for verifying label feasibility, we once-compute them for
         # constant lookup speed
         for time_bin in self.travel_times_per_bin:
@@ -160,7 +172,7 @@ class PricingNetwork():
                 self.max_travel_times_per_bin[time_bin][(i, j)] = max(self.travel_times_per_bin[time_bin][(i, j)])
                 self.quantile_travel_times_per_bin[time_bin][(i, j)] = find_alpha_quantile_pmf(self.travel_times_per_bin[time_bin][(i, j)], inst.worker_quantile)
 
-        # 0.3 get list of formations that can execute any given task
+        # 0.4 get list of formations that can execute any given task
         self.formation_ids_per_task = {}
         for task in self.tasks:
             self.formation_ids_per_task[task] = []
@@ -169,8 +181,7 @@ class PricingNetwork():
                 if task in inst.tasks_per_formation_with_domination[formation]:
                     self.formation_ids_per_task[task].append(formation)
 
-
-        # 1. Create nodes: one node for each task
+        # 1. Create nodes: one node for each task from current segment
         self.graph.add_node(self.source)
         self.graph.add_node(self.sink)
         for task in inst.tasks_per_formation_with_domination[formation_id]:  # include tasks for which current profile is dominated
@@ -179,72 +190,96 @@ class PricingNetwork():
         # 2. create arcs between all pairs of tasks & arcs to source/sink
         # 2.1 tasks from source and to sink
         for task in inst.tasks_per_formation_with_domination[formation_id]:
-            self.graph.add_edge(self.source, task)
-            self.graph.add_edge(task, self.sink)
-
+            # 2.1.1 For tasks of active tours: create source arc only for first task, and sink arc only for last task
+            if task in self.active_tasks:
+                if task in first_active_tasks:
+                    self.graph.add_edge(self.source, task)
+                if task in last_active_tasks:
+                    self.graph.add_edge(task, self.sink)
+            # 2.1.2 For all other tasks: create both source and sink arcs
+            else:
+                self.graph.add_edge(self.source, task)
+                self.graph.add_edge(task, self.sink)
         # 2.2 arcs between tasks
-        for u in inst.tasks_per_formation_with_domination[formation_id]:
-            for v in inst.tasks_per_formation_with_domination[formation_id]:
+        # Tasks from active tours will be treated separately
+        tasks_excl_active_task = [task for task in inst.tasks_per_formation_with_domination[formation_id] if task not in active_tasks_per_formation]
+        for u in tasks_excl_active_task:
+            for v in tasks_excl_active_task:
                 if u != v:
                     self.graph.add_edge(u, v)
                     self.graph.add_edge(v, u)
+        # 2.3 arcs connecting tasks from active tours
+        # Note: we iterate over tour.active_tasks because this makes it easier to retrieve the subsequent task
+        for tour in inst.tours_from_prev_segs:
+            if tour.formation_id == formation_id:
+                # 2.3.1 add arcs connecting subsequent tasks
+                for i in range(len(tour.active_tasks) - 1):
+                    self.graph.add_edge(tour.active_tasks[i], tour.active_tasks[i + 1])
+                # 2.3.2 add arcs connecting the last task to all other tasks
+                for task in tasks_excl_active_task:
+                    self.graph.add_edge(tour.active_tasks[-1], task)
 
         # 3. remove edges between tasks i and j if it is impossible to satisfy the service level constraint at task j
         # same holds if earliest finish time + worst-case travel time > latest (violated) start time
         no_edges_removed = 0
-        for task_i in inst.tasks_per_formation_with_domination[formation_id]:
-            for task_j in inst.tasks_per_formation_with_domination[formation_id]:
-                if task_i == task_j:
+        edges_to_remove = []
+        for (task_i, task_j) in self.graph.edges:
+            # 3.0 Skip source or sink edges
+            if task_i in ["source", "sink"] or task_j in ["source", "sink"]:
+                continue
+            # 3.1 for each possible finish time at task i: get its bin and calculate convolution with corresponding
+            # travel time distribution to task j
+            # 3.1.1 for each bin: get earliest finish time at task i
+            # (->distribution will dominate all distributions with the same bin and a later finish time)
+            covered_bins = [] # list of bins for which the earliest finish time at i (and the corresponding PMF) was already found
+            satisfies_chance_constr_per_bin = {}
+            for t in range(inst.earliest_finish[task_i], inst.latest_finish_viol[task_i] + 1):
+                if inst.bin_per_instant[t] in covered_bins:
                     continue
-                # 3.1 for each possible finish time at task i: get its bin and calculate convolution with corresponding
-                # travel time distribution to task j
-                # 3.1.1 for each bin: get earliest finish time at task i
-                # (->distribution will dominate all distributions with the same bin and a later finish time)
-                covered_bins = [] # list of bins for which the earliest finish time at i (and the corresponding PMF) was already found
-                satisfies_chance_constr_per_bin = {}
-                for t in range(inst.earliest_finish[task_i], inst.latest_finish_viol[task_i] + 1):
-                    if inst.bin_per_instant[t] in covered_bins:
-                        continue
-                    satisfies_chance_constr_per_bin[(t, inst.bin_per_instant[t])] = True
-                    covered_bins.append(inst.bin_per_instant[t])
-                # 3.1.2 calculate arrival time distribution for all time bins
-                for (finish_time_i, time_bin) in satisfies_chance_constr_per_bin:
-                    start_time_cdf_j = {}
-                    start_time_pmf_j = {}
-                    arrivals_at_tail = {}
-                    # 3.1.2.1 get start time distribution at task j
-                    for travel_time in self.travel_times_per_bin[time_bin][(task_i, task_j)]:
-                        arrivals_at_tail[finish_time_i + travel_time] = self.travel_times_per_bin[time_bin][(task_i, task_j)][travel_time]
-                    for arrival_time in range(min(arrivals_at_tail), max(arrivals_at_tail)+1):
-                        if arrival_time in arrivals_at_tail:
-                            if arrival_time <= self.earliest_starts[task_j]:
-                                if self.earliest_starts[task_j] not in start_time_pmf_j:
-                                    start_time_pmf_j[self.earliest_starts[task_j]] = 0
-                                start_time_pmf_j[self.earliest_starts[task_j]] += arrivals_at_tail[arrival_time]
-                            else:
-                                start_time_pmf_j[arrival_time] = arrivals_at_tail[arrival_time]
+                satisfies_chance_constr_per_bin[(t, inst.bin_per_instant[t])] = True
+                covered_bins.append(inst.bin_per_instant[t])
+            # 3.1.2 calculate arrival time distribution for all time bins
+            for (finish_time_i, time_bin) in satisfies_chance_constr_per_bin:
+                start_time_cdf_j = {}
+                start_time_pmf_j = {}
+                arrivals_at_tail = {}
+                # 3.1.2.1 get start time distribution at task j
+                for travel_time in self.travel_times_per_bin[time_bin][(task_i, task_j)]:
+                    arrivals_at_tail[finish_time_i + travel_time] = self.travel_times_per_bin[time_bin][(task_i, task_j)][travel_time]
+                for arrival_time in range(min(arrivals_at_tail), max(arrivals_at_tail)+1):
+                    if arrival_time in arrivals_at_tail:
+                        if arrival_time <= self.earliest_starts[task_j]:
+                            if self.earliest_starts[task_j] not in start_time_pmf_j:
+                                start_time_pmf_j[self.earliest_starts[task_j]] = 0
+                            start_time_pmf_j[self.earliest_starts[task_j]] += arrivals_at_tail[arrival_time]
                         else:
-                            start_time_pmf_j[arrival_time] = 0
-                    for t in start_time_pmf_j:
-                        start_time_cdf_j[t] = sum([start_time_pmf_j[t2] for t2 in start_time_pmf_j if t2 <= t])
-                    start_time_cdf_j = list(start_time_cdf_j.items())
-                    # 3.1.2.2 get quantile and check if quantile > latest_start[task_j]
-                    alpha_quantile_idx = bisect.bisect(start_time_cdf_j, self.alpha - alpha_tol, key = lambda x: x[1])
-                    if start_time_cdf_j[alpha_quantile_idx][0] > inst.latest_start[task_j]:
-                        satisfies_chance_constr_per_bin[(finish_time_i, time_bin)] = False
-                    # 3.1.2.3 check if latest_start_viol[task_j] is violated when i is finished as early as possible
-                    elif inst.earliest_finish[task_i] + self.max_travel_times_per_bin[time_bin][(task_i, task_j)] > inst.latest_start_viol[task_j]:
-                        satisfies_chance_constr_per_bin[(finish_time_i, time_bin)] = False
+                            start_time_pmf_j[arrival_time] = arrivals_at_tail[arrival_time]
+                    else:
+                        start_time_pmf_j[arrival_time] = 0
+                for t in start_time_pmf_j:
+                    start_time_cdf_j[t] = sum([start_time_pmf_j[t2] for t2 in start_time_pmf_j if t2 <= t])
+                start_time_cdf_j = list(start_time_cdf_j.items())
+                # 3.1.2.2 get quantile and check if quantile > latest_start[task_j]
+                alpha_quantile_idx = bisect.bisect(start_time_cdf_j, self.alpha - alpha_tol, key = lambda x: x[1])
+                if start_time_cdf_j[alpha_quantile_idx][0] > inst.latest_start[task_j]:
+                    satisfies_chance_constr_per_bin[(finish_time_i, time_bin)] = False
+                # 3.1.2.3 check if latest_start_viol[task_j] is violated when i is finished as early as possible
+                elif inst.earliest_finish[task_i] + self.max_travel_times_per_bin[time_bin][(task_i, task_j)] > inst.latest_start_viol[task_j]:
+                    satisfies_chance_constr_per_bin[(finish_time_i, time_bin)] = False
 
-                # 3.2 if edge violates chance constraint OR extended time window for ALL start times and start time bins: remove edge
-                if True not in satisfies_chance_constr_per_bin.values():
-                    for time_bin in inst.bins:
-                        del self.min_travel_times_per_bin[time_bin][(task_i, task_j)]
-                        del self.max_travel_times_per_bin[time_bin][(task_i, task_j)]
-                        del self.quantile_travel_times_per_bin[time_bin][(task_i, task_j)]
-                        del self.travel_times_per_bin[time_bin][(task_i, task_j)]
-                    self.graph.remove_edge(task_i, task_j)
-                    no_edges_removed += 1
+            # 3.2 if edge violates chance constraint OR extended time window for ALL start times and start time bins: remove edge
+            if True not in satisfies_chance_constr_per_bin.values():
+                for time_bin in inst.bins:
+                    if task_i in active_tasks_per_formation and task_j in active_tasks_per_formation:
+                        raise Exception(f"Tried removing an arc connecting two tasks from an active tour.")
+                    del self.min_travel_times_per_bin[time_bin][(task_i, task_j)]
+                    del self.max_travel_times_per_bin[time_bin][(task_i, task_j)]
+                    del self.quantile_travel_times_per_bin[time_bin][(task_i, task_j)]
+                    del self.travel_times_per_bin[time_bin][(task_i, task_j)]
+                edges_to_remove.append((task_i, task_j))
+                no_edges_removed += 1
+        for (task_i, task_j) in edges_to_remove:
+            self.graph.remove_edge(task_i, task_j)
 
         print(f"formation {formation_id}: {no_edges_removed} edges removed due to infeasibility w.r.t. chance constraint")
 
@@ -253,29 +288,32 @@ class PricingNetwork():
         # potentially occupying workforce for a shorter time window than when visiting i and j sequentially by the
         # same team
         edges_removed = 0
-        for task_i in inst.tasks_per_formation_with_domination[formation_id]:
-            for task_j in inst.tasks_per_formation_with_domination[formation_id]:
-                if task_i == task_j:
-                    continue
-                if (task_i, task_j) not in self.graph.edges:
-                    continue
-                all_bins_satisfied = True   # True iff. rule is satisfied for all bins
+        edges_to_remove = []
+        for (task_i, task_j) in self.graph.edges:
+            # 3.0 Skip source or sink edges
+            if task_i in ["source", "sink"] or task_j in ["source", "sink"]:
+                continue
+            all_bins_satisfied = True   # True iff. rule is satisfied for all bins
+            for time_bin in inst.bins:
+                # check if edge satisfies rule for current time bin
+                if (inst.earliest_start[task_j] - inst.latest_finish_viol[task_i] <
+                        self.max_travel_times_per_bin[time_bin][(task_i, "source")] + self.max_travel_times_per_bin[time_bin][("source", task_j)]):
+                    all_bins_satisfied = False
+                    break
+            # if unnecessary waiting time is guaranteed for all bins: remove direct connection
+            if all_bins_satisfied:
+                edges_removed += 1
+                edges_to_remove.append((task_i, task_j))
                 for time_bin in inst.bins:
-                    # check if edge satisfies rule for current time bin
-                    if (inst.earliest_start[task_j] - inst.latest_finish_viol[task_i] <
-                            self.max_travel_times_per_bin[time_bin][(task_i, "source")] + self.max_travel_times_per_bin[time_bin][("source", task_j)]):
-                        all_bins_satisfied = False
-                        break
-                # if unnecessary waiting time is guaranteed for all bins: remove direct connection
-                if all_bins_satisfied:
-                    edges_removed += 1
-                    self.graph.remove_edge(task_i, task_j)
-                    for time_bin in inst.bins:
-                        del self.min_travel_times_per_bin[time_bin][(task_i, task_j)]
-                        del self.max_travel_times_per_bin[time_bin][(task_i, task_j)]
-                        del self.quantile_travel_times_per_bin[time_bin][(task_i, task_j)]
-                        del self.travel_times_per_bin[time_bin][(task_i, task_j)]
+                    if task_i in active_tasks_per_formation and task_j in active_tasks_per_formation:
+                        raise Exception(f"Tried removing an arc connecting two tasks from an active tour.")
+                    del self.min_travel_times_per_bin[time_bin][(task_i, task_j)]
+                    del self.max_travel_times_per_bin[time_bin][(task_i, task_j)]
+                    del self.quantile_travel_times_per_bin[time_bin][(task_i, task_j)]
+                    del self.travel_times_per_bin[time_bin][(task_i, task_j)]
         print(f"Edges removed due to guaranteed waiting times: {edges_removed}")
+        for (task_i, task_j) in edges_to_remove:
+            self.graph.remove_edge(task_i, task_j)
 
 
         # 5. compute all possible skill compositions
@@ -477,6 +515,7 @@ class PricingNetwork():
             Tour executed by the underlying pricing network's formation/profile
         """
         tour = GH_tour(inst.formations_w_d[self.formation_id], self.formation_id)
+        tour.skill_comp_frozen = label.skill_comp_frozen
         tour.cost = label.tour_cost
         tour.reduced_costs = label.cost
         tour.task_reward = label.task_reward
@@ -484,6 +523,7 @@ class PricingNetwork():
         tour.leave_time = label.start_time_from_depot
         tour.quantile_return_time = label.quantile_case_finish
         tour.tour_cost = label.tour_cost
+        tour.task_cost_dict = label.task_cost_dict
         tour.skill_comp = label.min_skill_comp
         tour.skill_comp_cnt = label.min_skill_comp_cnt
         tour.tw_viol_prob = label.tw_viol_prob.copy()
