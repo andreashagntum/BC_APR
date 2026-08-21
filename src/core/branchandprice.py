@@ -257,6 +257,11 @@ def get_solution(inst, no_gomory_cuts, branch_on_task_finish_times, use_dmp, tl_
         if not node_sol or node_sol[0] > eps_global: # fake tour (index 0) used => node must be infeasible
             print("Node number " + str(nodes_count) + " is infeasible")
             node.update_lb(math.inf)
+            for i in range(1, len(node_tours)):  # start at index 1 to skip fake tour
+                tour = node_tours[i]
+                if tour.get_hash() not in all_tours_hashes:
+                    all_tours.append(tour)
+                    all_tours_hashes.append(tour.get_hash())
             continue
 
         # 2.5 else: update lower bound at node, add new tours found during column generation to all_tours
@@ -573,7 +578,7 @@ def get_start_at_earliest_tours(inst):
     tours = []
     for formation_id in inst.tasks_per_formation:
         for task in inst.tasks_per_formation[formation_id]:
-            # Skip active tasks: their current tour will be appended to tours at the end of this function
+            # Skip active tasks
             if task in inst.tasks_from_prev_segs:
                 continue
             tour = GH_tour(inst.formations_w_d[formation_id], formation_id)
@@ -631,11 +636,6 @@ def get_start_at_earliest_tours(inst):
             tour.quantile_finish_time["sink"] = tour.quantile_finish_time[task] + tt_quantile
             tour.quantile_return_time = tour.quantile_finish_time["sink"]
             tours.append(tour)
-
-    # deepcopy tours from previous segment and store
-    for tour in inst.tours_from_prev_segs:
-        tour_c = copy.deepcopy(tour)
-        tours.append(tour_c)
 
     return tours
 
@@ -1002,8 +1002,7 @@ class GH_solution():
                 tour.net_task_cost_dict = {}
                 for task in tour.task_cost_dict:
                     tour.net_task_cost_dict[task] = tour.task_cost_dict[task] - self.inst.weights[task] * self.inst.earliest_finish[task]
-                    assert tour.net_task_cost_dict[task] >= 0
-
+                    assert tour.net_task_cost_dict[task] >= -eps_global
         self.optimal = optimal
         
     def add_heuristic_solution(self, heur_sol, heur_val, heur_tours, lower_bound, elapsed_time, root_lb):
@@ -1079,7 +1078,7 @@ class GH_solution():
                 tour.net_task_cost_dict = {}
                 for task in tour.task_cost_dict:
                     tour.net_task_cost_dict[task] = tour.task_cost_dict[task] - self.inst.weights[task] * self.inst.earliest_finish[task]
-                    assert tour.net_task_cost_dict[task] >= 0
+                    assert tour.net_task_cost_dict[task] >= -eps_global
 
 
     def to_string(self):

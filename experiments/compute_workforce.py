@@ -61,8 +61,8 @@ def compute_workforce_rs(inst, travel_times_per_bin, rs, normalize_workforce = F
         inst.workers_w_d[skill_level] = w_w_d
 
     # 4. Convert workers data to time-dependent dict
-    inst.workers = {k: {t: workers[k] for t in range(inst.begin_horizon, inst.end_horizon + 1)} for k in workers}
-    inst.workers_w_d = {k: {t: inst.workers_w_d[k] for t in range(inst.begin_horizon, inst.end_horizon + 1)} for k in inst.workers_w_d}
+    inst.workers = {k: {t: workers[k] for t in range(inst.begin_horizon, 2 * inst.end_horizon + 1)} for k in workers}
+    inst.workers_w_d = {k: {t: inst.workers_w_d[k] for t in range(inst.begin_horizon, 2 * inst.end_horizon + 1)} for k in inst.workers_w_d}
 
     return inst
 

@@ -4,23 +4,63 @@ the solver.
 
 import json
 from tqdm import tqdm
-import warnings
+import numpy as np
+
+def convert_to_distributions(data):
+    """Convert old data format into new format by converting deterministic time windows and service times into
+    distributions.
+
+    Parameters
+    ----------
+    data: dict
+       Instance JSON read from disk
+
+    Returns
+    -------
+    data: dict
+       Instance JSON with datastructures adjusted to match the new format
+    """
+
+    data["scheduled_earliest_start"] = data["earliest_start"]
+    data["scheduled_latest_finish"] = data["latest_finish"]
 
 
-def load_InstWithTimeDiscr(filepath, worker_quantile, t_len = None, tt_data_path = None):
+    data["earliest_start"] = {task: {data["earliest_start"][task]: 1} for task in data["earliest_start"]}
+
+    data["modes"] = {task: {f: {data["modes"][task][f]: 1} for f in data["modes"][task]} for task in data["modes"]}
+
+
+    return data
+
+
+def load_InstWithTimeDiscr(filepath, worker_quantile, estimator_fn, sample = False, rng = None,
+                           t_len = None, tt_data_path = None, inst_type = None, max_twviol = None,
+                           service_level = None):
     """Load instance data into object of type Instance, which is the used by the solver.
 
     Parameters
     ----------
     filepath: str
         Filepath where instance data is located. Required format: .json
-    worker_quantile: float in [0,1]
+    worker_quantile: float
         parameter gamma from the paper, used in the workforce constraints.
+    estimator_fn: function
+        Function used to estimate service times and time windows (e.g. min, max, mean)
+    sample: bool
+        If set to True, service times and time windows are once-sampled when the instance is constructed
+    rng: np.random.RandomState.Generator
+        RNG object for sampling (only used if sample is set to True)
     t_len: int or None
         Time length per instance. Only used if instance JSON contains no instantLength key
     tt_data_path: str
        Path where centralized travel time JSON is stored. Only used in instance JSON contains no travel_time key.
-
+    inst_type: 'new' OR 'classic'
+       Indicates if the input instances uses the classic format (of instances used for Hagn et al. (2026)) or the new
+       format (with stochastic service times and time windows, and several additional auxiliary data)
+    max_twviol: int or NoneType
+       If passed, overrides the max_twviol key of the instance JSON file. If inst_type == "classic", this value MUST be int
+    service_level: float or NoneType
+       If passed, overrides the service_level key of the instance JSON file
     Returns
     -------
     val: float
@@ -31,8 +71,15 @@ def load_InstWithTimeDiscr(filepath, worker_quantile, t_len = None, tt_data_path
 
 
     f = open(filepath)
-    data = json.load(f)
+    data = json.load(f, object_hook=keys_to_int)
     f.close()
+
+    if inst_type == "classic":
+        data = convert_to_distributions(data)
+
+    data["max_twviol"] = max_twviol if max_twviol is not None else data["max_twviol"]
+    data["service_level"] = service_level if max_twviol is not None else data["service_level"]
+
 
     inst = type('Instance', (object,), {})()
     inst.tasks_per_formation = data["tasks_per_formation"]
@@ -42,6 +89,7 @@ def load_InstWithTimeDiscr(filepath, worker_quantile, t_len = None, tt_data_path
     inst.weights = data["weights"]
     inst.tasks = data["tasks"]
     inst.tasks_from_prev_segs = [] # new: tasks carried over from previous segments: no-reoptimization permitted for these tasks as they are already executed
+    inst.fixed_finish_times = {} # new: fixed finish times for tasks carried over from previous segments: during pricing, cost will be computed deterministically
     inst.all_tasks = inst.tasks + inst.tasks_from_prev_segs
     inst.active_tours_from_prev_segs = [] # tours from previous segment that are still active (tasks can be enqueued for these tours, or they can be sent to the depot)
     inst.skill_levels = data["skill_levels"]
@@ -49,45 +97,77 @@ def load_InstWithTimeDiscr(filepath, worker_quantile, t_len = None, tt_data_path
     inst.worker_quantile = worker_quantile
     if "instantLength" not in data:
         data["instantLength"] = t_len
+    inst.always_feas_edges = [] # list of time bins and edges for which chance constr./LFv feas. check will be skipped in the next BPC&S iteration
 
-    is_fully_stoch_data = "scheduled_earliest_start" in data
-    # convert task execution times to deterministic values if needed
-    if is_fully_stoch_data:
-        inst.modes = {task: {mode: int(min(data["modes"][task][mode])) for mode in data["modes"][task]} for task in data["modes"]}
+    # if sample requested: compute sampled service times and time windows
+    if sample:
+        inst.monte_carlo = True
+        inst.sampled_modes = {}
+        inst.sampled_modes_with_domination = {}
+        inst.sampled_earliest_start = {}
+        inst.sampled_latest_finish = {}
+        inst.sampled_latest_finish_viol = {}
+        for task in data["tasks"]:
+            # sample task execution times
+            inst.sampled_modes[task] = {}
+            inst.sampled_modes_with_domination[task] = {}
+            for f in data["modes"][task]:
+                items = list(data["modes"][task][f].items())
+                if rng:
+                    inst.sampled_modes[task][f] = rng.choice([k for (k, _) in items], p = [p for (_, p) in items])
+                else: # fallback for old instance format
+                    inst.sampled_modes[task][f] = items[0][0]
+                # for all other dominated modes, values will be set at runtime
+                inst.sampled_modes_with_domination[task][f] = inst.sampled_modes[task][f]
+            # sample time window
+            items_tw = list(data["earliest_start"][task].items())
+            if rng:
+                inst.sampled_earliest_start[task] = rng.choice([k for (k, _) in items_tw], p = [p for (_, p) in items_tw])
+            else: # fallback for old instance format
+                inst.sampled_earliest_start[task] = items_tw[0][0]
+            # latest finish: depends on earliest start + scheduled time window length
+            tw_len = data["scheduled_latest_finish"][task] - data["scheduled_earliest_start"][task]
+            inst.sampled_latest_finish[task] = inst.sampled_earliest_start[task] + tw_len
+            inst.sampled_latest_finish_viol[task] = inst.sampled_latest_finish[task] + data["max_twviol"]
+            # Note: we do not explicitly computed earliest_finish and latest_start because sampling is only used for MC
+            # tour evaluation, which in turn only cares about earliest_start and latest_finish
     else:
-        inst.modes = data["modes"]
-    # handle time windows
-    if is_fully_stoch_data:
-        inst.earliest_start = data["scheduled_earliest_start"] if "scheduled_earliest_start" in data else data["tasks"]
-        inst.latest_finish = data["scheduled_latest_finish"] if "scheduled_latest_finish" in data else data["tasks"]
-        inst.latest_finish_viol = {task: inst.latest_finish[task] + data["max_twviol"] for task in data["tasks"]}
+        inst.monte_carlo = False
+
+
+    # convert task execution times to deterministic values
+    inst.modes = {task: {mode: estimator_fn(data["modes"][task][mode]) for mode in data["modes"][task]} for task in data["modes"]}
+
+    # handle time windows: we sample based on the given estimator_fn
+    inst.earliest_start = {}
+    inst.latest_finish = {}
+    inst.latest_finish_viol = {}
+    for task in inst.tasks:
+        tw_len = data["scheduled_latest_finish"][task] - data["scheduled_earliest_start"][task]
+        inst.earliest_start[task] = estimator_fn(data["earliest_start"][task])
+        inst.latest_finish[task] = inst.earliest_start[task] + tw_len
+        inst.latest_finish_viol[task] = inst.latest_finish[task] + data["max_twviol"]
         # earliest_finish, latest_start, and latest_start_viol depend on earliest_start + min_execution_time
         # and on latest_finish - min_execution_time, respectively, and will thus be computed at the end of this script
         # (after dominated mode removal)
-    else:
-        inst.earliest_start = data["earliest_start"]
-        inst.latest_start = data["latest_start"]
-        inst.earliest_finish = data["earliest_finish"]
-        inst.latest_finish = data["latest_finish"]
-        inst.latest_start_viol = data["latest_start_viol"]
-        inst.latest_finish_viol = data["latest_finish_viol"]
+
     inst.formations = {}
     inst.task_locations = data["task_locations"]
 
     for f_id in data["formations"]:
         inst.formations[f_id] = {}
         for level in data["formations"][f_id]:
-            inst.formations[f_id][int(level)] = data["formations"][f_id][level]
+            inst.formations[f_id][level] = data["formations"][f_id][level]
     
     inst.formations_w_d = {}
     for f_id in data["formations_w_d"]:
         inst.formations_w_d[f_id] = {}
         for level in data["formations_w_d"][f_id]:
-            inst.formations_w_d[f_id][int(level)] = data["formations_w_d"][f_id][level]
+            inst.formations_w_d[f_id][level] = data["formations_w_d"][f_id][level]
     
     inst.workers = {}
     for w in data["workers"]:
-        inst.workers[int(w)] = data["workers"][w]
+        inst.workers[w] = data["workers"][w]
     
     inst.workers_w_d = {}
     for w in data["workers_w_d"]:
@@ -97,10 +177,10 @@ def load_InstWithTimeDiscr(filepath, worker_quantile, t_len = None, tt_data_path
     if "travel_times" in data:
         travel_times_per_bin = {}
         for time_bin in data["travel_times"]:
-            travel_times_per_bin[int(time_bin)] = {}
+            travel_times_per_bin[time_bin] = {}
             for i in data["travel_times"][time_bin]:
                 for j in data["travel_times"][time_bin][i]:
-                    travel_times_per_bin[int(time_bin)][(i,j)] = {int(k):v for (k,v) in data["travel_times"][time_bin][i][j].items()}  # entries are now dictionaries with keys = edges, values = prob. of travel time
+                    travel_times_per_bin[time_bin][(i,j)] = {k: v for (k,v) in data["travel_times"][time_bin][i][j].items()}  # entries are now dictionaries with keys = edges, values = prob. of travel time
     # else: construct it from central JSON file
     else:
         with open(f"{tt_data_path}/stoch_travel_times_bin_len{data["bin_minutes"]}_instantLength{data["instantLength"]}.json",
@@ -114,9 +194,9 @@ def load_InstWithTimeDiscr(filepath, worker_quantile, t_len = None, tt_data_path
             for time_bin in tqdm(stoch_tts, "Travel time bins constructed:"):
                 travel_times_per_bin[time_bin] = {}
                 for i in data["travel_times"][time_bin]:
-                    gate_i = int(data["task_locations"][i])
+                    gate_i = data["task_locations"][i]
                     for j in data["travel_times"][time_bin][i]:
-                        gate_j = int(data["task_locations"][j])
+                        gate_j = data["task_locations"][j]
                         data["travel_times"][time_bin][(i, j)] = clip_and_rescale_distribution(stoch_tts[time_bin][min(gate_i, gate_j)][max(gate_i, gate_j)],
                                                                                               data["instantLength"])
 
@@ -130,7 +210,7 @@ def load_InstWithTimeDiscr(filepath, worker_quantile, t_len = None, tt_data_path
                         gate_j = int(data["task_locations"][j])
                         travel_times_per_bin[time_bin][(i, j)] = stoch_tts[time_bin][min(gate_i, gate_j)][max(gate_i, gate_j)]
 
-    inst.bin_per_instant = {int(k): v for (k,v) in data["time_step_to_bin"].items()}
+    inst.bin_per_instant = {k: v for (k,v) in data["time_step_to_bin"].items()}
     # add bin data if missing
     for t in data["instants"]:
         if t not in inst.bin_per_instant:
@@ -141,17 +221,19 @@ def load_InstWithTimeDiscr(filepath, worker_quantile, t_len = None, tt_data_path
                 next_larger_t = min([tt for tt in inst.bin_per_instant if tt > t])
                 inst.bin_per_instant[t] = inst.bin_per_instant[next_larger_t]
     # reverse mapping
-    inst.instant_per_bin = {int(b): [] for b in travel_times_per_bin}
+    inst.instant_per_bin = {b: [] for b in travel_times_per_bin}
     for t in inst.bin_per_instant:
-        inst.instant_per_bin[int(inst.bin_per_instant[t])].append(t)
+        inst.instant_per_bin[inst.bin_per_instant[t]].append(t)
     inst.instant_per_bin = {b: list(sorted(inst.instant_per_bin[b])) for b in inst.instant_per_bin}
 
 
     inst.bins = list(travel_times_per_bin.keys())
+    if sample:
+        inst.sampled_tts = {b: {} for b in inst.bins}
 
     inst.skill_levels = []
     for level in data["skill_levels"]:
-        inst.skill_levels.append(int(level))
+        inst.skill_levels.append(level)
         
     inst.instants = []
     for instant in data["instants"]:
@@ -217,18 +299,46 @@ def load_InstWithTimeDiscr(filepath, worker_quantile, t_len = None, tt_data_path
                     # update modes_with_domination
                     if formation_id_dom not in inst.modes_with_domination[task]:
                         inst.modes_with_domination[task][formation_id_dom] = inst.modes[task][formation_id]
+                        # transfer sampled service time if needed
+                        if sample:
+                            inst.sampled_modes_with_domination[task][formation_id_dom] = inst.sampled_modes[task][formation_id]
                     
                     # update tasks_per_formation_with_domination
                     if task not in inst.tasks_per_formation_with_domination[formation_id_dom]:
                         inst.tasks_per_formation_with_domination[formation_id_dom].append(task) 
 
     # define remaining time window structures: earliest_start, latest_start, and latest_start_viol
-    if is_fully_stoch_data:
-        inst.earliest_finish = {task: inst.earliest_start[task] + min(inst.modes[task].values()) for task in data["tasks"]}
-        inst.latest_start = {task: inst.latest_finish[task] - min(inst.modes[task].values()) for task in data["tasks"]}
-        inst.latest_start_viol = {task: inst.latest_start[task] + data["max_twviol"] for task in data["tasks"]}
+    inst.earliest_finish = {task: inst.earliest_start[task] + min(inst.modes[task].values()) for task in data["tasks"]}
+    inst.latest_start = {task: inst.latest_finish[task] - min(inst.modes[task].values()) for task in data["tasks"]}
+    inst.latest_start_viol = {task: inst.latest_start[task] + data["max_twviol"] for task in data["tasks"]}
+    # if sampling desired: also sampled earliest finish times, as we will need it for net cost computation
+    if sample:
+        inst.sampled_earliest_finish = {task: inst.sampled_earliest_start[task] + min(inst.sampled_modes[task].values())
+                                        for task in data["tasks"]}
+        inst.sampled_latest_start = {task: inst.latest_start[task] for task in data["tasks"]}
+        inst.sampled_latest_start_viol = {task: inst.latest_start_viol[task] for task in data["tasks"]}
+
 
     return inst, travel_times_per_bin
+
+def keys_to_int(d):
+    """Helper function that automatically parses string-formatted integer keys into integers.
+    Also handles string-formatted floats and converts them to the corresponding float value.
+    Note: as of August 2026, we do not use float-indexed keys, but we still provide this functionality for the future.
+    """
+    new_d = {}
+    for k, v in d.items():
+        try:
+            key = int(k)
+        except ValueError:
+            try:
+                f = float(k)
+                key = int(f) if f.is_integer() else f
+            except ValueError:
+                key = k
+        new_d[key] = v
+    return new_d
+
 
 def add_travel_times_per_bin_restricted(inst, travel_times_per_bin, time_bins):
     """Add travel time data to instance. Currently a shallow copy, as we never mutate this object.

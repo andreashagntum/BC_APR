@@ -128,6 +128,7 @@ class PricingNetwork():
         self.latest_finishes_viol = inst.latest_finish_viol
         self.latest_starts = {}
         self.latest_starts_viol = {}
+        self.always_feas_edges = [(fr, to) for (fr, to, _) in inst.always_feas_edges] if inst.monte_carlo else [] # list of edges that bypass chance constraint feasibility check (= edges inherited from solution of prior segments)
         for task in inst.tasks_per_formation_with_domination[formation_id]:
             self.latest_starts[task] = max(self.earliest_starts[task], self.latest_finishes[task] - self.task_execution_times[task])
             self.latest_starts_viol[task] = self.latest_finishes_viol[task] - self.task_execution_times[task]
@@ -140,19 +141,20 @@ class PricingNetwork():
 
         # 0. preprocessing
         # 0.1 get active tours, their first/last tasks, and skill comps.
-        active_tours_per_formation = [tour for tour in inst.tours_from_prev_segs if tour.formation_id == formation_id]
-        active_tasks_per_formation = [task for tour in active_tours_per_formation for task in tour.active_tasks]
-        first_active_tasks = [tour.active_tasks[0] for tour in active_tours_per_formation]
-        last_active_tasks = [tour.active_tasks[-1] for tour in active_tours_per_formation]
+        self.active_tours_per_formation = [tour for tour in inst.tours_from_prev_segs if tour.formation_id == formation_id]
+        active_tasks_per_formation = [task for tour in self.active_tours_per_formation for task in tour.active_tasks]
+        first_active_tasks = [tour.active_tasks[0] for tour in self.active_tours_per_formation]
+        last_active_tasks = [tour.active_tasks[-1] for tour in self.active_tours_per_formation]
         self.active_tasks = active_tasks_per_formation
         self.first_active_tasks = first_active_tasks
-        self.leave_time_per_first_active_task = {tour.active_tasks[0]: tour.leave_time for tour in active_tours_per_formation}
-        self.skill_comp_cnt_per_active_tour = {tour.active_tasks[0]: tour.skill_comp_cnt for tour in active_tours_per_formation}
-        self.skill_comp_per_active_tour = {tour.active_tasks[0]: tour.skill_comp for tour in active_tours_per_formation}
-        self.sequence_per_active_task = {tour.active_tasks[0]: tour.active_tasks for tour in active_tours_per_formation}
+        self.last_active_tasks = last_active_tasks
+        self.leave_time_per_first_active_task = {tour.active_tasks[0]: tour.leave_time for tour in self.active_tours_per_formation}
+        self.skill_comp_cnt_per_active_tour = {tour.active_tasks[0]: tour.skill_comp_cnt for tour in self.active_tours_per_formation}
+        self.skill_comp_per_active_tour = {tour.active_tasks[0]: tour.skill_comp for tour in self.active_tours_per_formation}
+        self.sequence_per_active_task = {tour.active_tasks[0]: tour.active_tasks for tour in self.active_tours_per_formation}
 
         # 0.2 copy travel_times from inst.depot to tasks to travel_times from self.source/self.sink to tasks for easier value retrieving
-        for task in inst.tasks_per_formation_with_domination[formation_id] + active_tasks_per_formation:
+        for task in inst.tasks_per_formation_with_domination[formation_id]:
             self.tasks.append(task)
             for time_bin in self.travel_times_per_bin:
                 self.travel_times_per_bin[time_bin][(self.source, task)] = {i: 0 for i in range(min(inst.travel_times_per_bin[time_bin][(inst.depot, task)]),
@@ -219,6 +221,7 @@ class PricingNetwork():
                 for task in tasks_excl_active_task:
                     self.graph.add_edge(tour.active_tasks[-1], task)
 
+
         # 3. remove edges between tasks i and j if it is impossible to satisfy the service level constraint at task j
         # same holds if earliest finish time + worst-case travel time > latest (violated) start time
         no_edges_removed = 0
@@ -226,6 +229,9 @@ class PricingNetwork():
         for (task_i, task_j) in self.graph.edges:
             # 3.0 Skip source or sink edges
             if task_i in ["source", "sink"] or task_j in ["source", "sink"]:
+                continue
+            # Also skip edges that are always feasible (i.e., edges from tours of previous segments that were already traversed in the past)
+            if (task_i, task_j) in self.always_feas_edges:
                 continue
             # 3.1 for each possible finish time at task i: get its bin and calculate convolution with corresponding
             # travel time distribution to task j
@@ -237,7 +243,6 @@ class PricingNetwork():
                 if inst.bin_per_instant[t] in covered_bins:
                     continue
                 satisfies_chance_constr_per_bin[(t, inst.bin_per_instant[t])] = True
-                covered_bins.append(inst.bin_per_instant[t])
             # 3.1.2 calculate arrival time distribution for all time bins
             for (finish_time_i, time_bin) in satisfies_chance_constr_per_bin:
                 start_time_cdf_j = {}

@@ -206,7 +206,6 @@ def get_CG_LB_no_heuristic(pricing_networks, node, disaggr_infeas_solutions, tl,
                                        node.solve_as_dmp, node.gomory_cuts_lhs, node.gomory_cuts_rhs,
                                        cores_per_thread)
 
-
     # 2. find negative columns by solving the pricing problem
     # 2.1 create pricing network for each profile (worker formation)
     for formation_id in pricing_networks:

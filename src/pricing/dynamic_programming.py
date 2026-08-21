@@ -208,7 +208,8 @@ def create_initial_labels(pricing_network, forb_tour_idxs, mu, delta, rho_gr, rh
                                                     pricing_network.weights[node], pricing_network.alpha,
                                                     pricing_network.max_travel_times_per_bin[label_t_bin_pred][(pricing_network.source, node)],
                                                     pricing_network.min_travel_times_per_bin[label_t_bin_pred][(pricing_network.source, node)],
-                                                    pricing_network.quantile_travel_times_per_bin[label_t_bin_pred][(pricing_network.source, node)])
+                                                    pricing_network.quantile_travel_times_per_bin[label_t_bin_pred][(pricing_network.source, node)],
+                                                    not (pricing_network.source, node) in pricing_network.always_feas_edges)
 
             pricing_network.calculate_start_distr_time += time.time() - start_time
             # 2.4.2 continue if extension is not feasible, since extension will also be infeasible for every instant > t
@@ -294,8 +295,13 @@ def create_initial_labels(pricing_network, forb_tour_idxs, mu, delta, rho_gr, rh
             # when arcs are forced, it might be beneficial to use 'bad' arcs first in order to be able to use forced
             # arcs with large negative duals afterwards
             if not yuan_approach and len(relevant_t_gr_branches) == 0 and mu[node] < node_t_label.task_costs:
-                labels_skipped += 1
-                break
+                # this conditions is skipped if task is part of a tour from the previous segment, but not its last
+                # active task: in this case, extending along an arc that increases reduced costs can be beneficial
+                # because it allows us to reach labels with very large mus, which can only be reached from the current
+                # node
+                if node not in pricing_network.active_tasks:
+                    labels_skipped += 1
+                    break
 
             # 2.4.7. if probability distribution of start times at any other task is guaranteed to be below alpha:
             # task can not be visited anymore -> add task to list of unreachable tasks
@@ -306,9 +312,10 @@ def create_initial_labels(pricing_network, forb_tour_idxs, mu, delta, rho_gr, rh
                 other_task = edge[1]
                 if other_task == pricing_network.sink:
                     continue
-                if max_prob_leq_alpha_finish +  pricing_network.min_travel_times_per_bin[label_t_bin_succ][node, other_task] > pricing_network.latest_starts[other_task]:
-                    node_t_label.unreachable_tasks_prob += [other_task]
-                    node_t_label.length += 1        # see Righini, Salani p. 160
+                if (node, other_task) not in pricing_network.always_feas_edges:
+                    if max_prob_leq_alpha_finish +  pricing_network.min_travel_times_per_bin[label_t_bin_succ][node, other_task] > pricing_network.latest_starts[other_task]:
+                        node_t_label.unreachable_tasks_prob += [other_task]
+                        node_t_label.length += 1        # see Righini, Salani p. 160
 
             # 2.4.7 check if new label is dominated by any previous label. New label cannot dominate old labels as its
             # starting time is larger than all previously generated labels', thus stochastic dominance is not possible.
@@ -471,7 +478,6 @@ def spprc_algorithm(pricing_network, forb_tour_idxs, forb_skill_comps, mu, delta
                                                                             mu, delta, rho_gr, rho_le, psi, zeta_le, zeta_gr,
                                                                             t_max_le, t_max_gr, skill_comps_cnt[0],
                                                                             solve_as_dmp, node_in_tree, yuan_approach)
-
 
     # 2. perform labeling algorithm
     forbidden_skill_comps_per_sink_label = {}  # keys: list indexes of sink labels, values: list of skill comps. for which label/tour is forbidden
@@ -1178,7 +1184,7 @@ class Label():
 
     def get_start_time_distr(self, task, travel_times, execution_time_head, earliest_start_tail, latest_finish_tail,
                              latest_finish_viol_tail, execution_time_tail, tail_weight, alpha, max_travel_time, min_travel_time,
-                             quantile_dist):
+                             quantile_dist, check_constr):
         """Calculate probability distribution of start times at tail node of an extension.
 
         Parameters
@@ -1191,10 +1197,10 @@ class Label():
             Execution time of the head node of the target extension (i.e., last node of current label)
         earliest_start_tail: int
             Earliest possible start time of the tail node
-        latest_finish_tail: int
-            Latest finish time of the tail node that does not incur a penalty
-        latest_finish_viol_tail: int
-            Latest feasible finish time of the tail node
+        latest_finish_tail: int | math.inf
+            Latest finish time of the tail node that does not incur a penalty (inf for sink extensions)
+        latest_finish_viol_tail: int | math.inf
+            Latest feasible finish time of the tail node (inf for sink extensions)
         execution_time_tail: int
             Execution time of the tail node
         tail_weight: float
@@ -1207,6 +1213,9 @@ class Label():
             Minimum travel time between head and tail node
         quantile_dist: int
             gamma-quantile of travel time distribution between head and tail node
+        check_constr: bool
+            Indicates if chance constraint and LFe constraint should be checked (disabled for 'infeasible' extensions
+            inherited from solutions of prior segments)
 
         Returns
         -------
@@ -1222,8 +1231,6 @@ class Label():
             More expressive description of the reason for infeasibility if extension is infeasible, else None
 
         """
-
-
         earliest_arrival_tail = self.earliest_start_head + execution_time_head + min_travel_time
         latest_arrival_tail = self.latest_start_head + execution_time_head + max_travel_time
         # 1. if latest arrival at tail node < earliest_start_tail: trivial PMF, can create start time PMF and CDF directly
@@ -1258,14 +1265,15 @@ class Label():
             # 3.4 feasibility check
             # extension is feasible iff. latest finish time > latest feasible finish time and CDF at latest feasible finish time <= alpha
             # and P(finishing > latest finish time w/ violation) = 0
-            if max(latest_arrival_tail, earliest_start_tail) + execution_time_tail > latest_finish_viol_tail:
+            if check_constr and max(latest_arrival_tail, earliest_start_tail) + execution_time_tail > latest_finish_viol_tail:
                 return {}, {}, False, "lf_viol_violated", "CC violated: max(latest_arrival, earliest_start) + execution_time > latest_finish_viol"
-            if max(latest_arrival_tail, earliest_start_tail) + execution_time_tail > latest_finish_tail and start_time_cdf_tail[latest_finish_tail-execution_time_tail] < alpha - alpha_tol:
+            if check_constr and max(latest_arrival_tail, earliest_start_tail) + execution_time_tail > latest_finish_tail and start_time_cdf_tail[latest_finish_tail-execution_time_tail] < alpha - alpha_tol:
                 return {}, {}, False, "chance_constr_violated", "CC violated: max(latest_arrival, earliest_start) + execution_time > latest_finish AND start_time_cdf[latest_finish-execution_time] < alpha"
             if latest_finish_tail-execution_time_tail in start_time_cdf_tail:
                 self.tw_viol_prob[task] = 1 - start_time_cdf_tail[latest_finish_tail-execution_time_tail]
             else:
                 self.tw_viol_prob[task] = 0
+
         # 4. update costs
         self.task_costs = 0  # expected costs of performing task (expected finish time + lateness penalty)
         for t in start_time_pmf_tail:
@@ -1284,7 +1292,6 @@ class Label():
         self.median_finish_per_task[task] = self.median_finish
         self.earliest_start_head = max(earliest_arrival_tail, earliest_start_tail)
         self.latest_start_head = max(latest_arrival_tail, earliest_start_tail)
-
 
 
         return start_time_pmf_tail, start_time_cdf_tail, True, None, None
@@ -1407,11 +1414,12 @@ class Label():
             max_travel_time = max_travel_times[(self.sequence[-1], ext_task)]
             min_travel_time = min_travel_times[(self.sequence[-1], ext_task)]
             quant_travel_time = quantile_travel_times[(self.sequence[-1], ext_task)]
-            _, start_time_cdf, is_feasible, _, _  = ext.get_start_time_distr(ext_task, dists,
+            _, start_time_cdf, is_feasible, reason, _  = ext.get_start_time_distr(ext_task, dists,
                                                                                 execution_time_head, earliest_start_tail,
-                                                                                end_horizon + 1, end_horizon + 1,
+                                                                                math.inf, math.inf,
                                                                                 execution_time_tail, tail_weight, alpha,
-                                                                                max_travel_time, min_travel_time, quant_travel_time)
+                                                                                max_travel_time, min_travel_time, quant_travel_time,
+                                                                             not (self.sequence[-2], self.sequence[-1]) in pricing_network.always_feas_edges)
             if not is_feasible:# quick sanity check
                 raise Exception("Sink extension is infeasible")
 
@@ -1487,6 +1495,7 @@ class Label():
                         if not solve_as_dmp:
                             return None
 
+
             return ext
 
         # 3. if extension passed prechecks and ext_task is not the sink: compute extensions
@@ -1497,7 +1506,12 @@ class Label():
             # after the tour has started, as the reduced cost of these constraints are non-positive
             relevant_t_gr_branches = [tt for tt in node_in_tree.t_gr if tt >= self.start_time_from_depot]
             if not yuan_approach and len(relevant_t_gr_branches) == 0 and mu[ext_task] < tail_weight * (earliest_start_tail + execution_time_tail):
-                return None
+                # this conditions is skipped if task is part of a tour from the previous segment, but not its last
+                # active task: in this case, extending along an arc that increases reduced costs can be beneficial
+                # because it allows us to reach labels with very large mus, which can only be reached from the current
+                # node
+                if ext_task not in pricing_network.active_tasks:
+                    return None
             # 3.2 if only extension towards the (mu-wise) best tasks are allowed and ext_task is not among the most
             # profitable tasks reachable from self.sequence[-1]: do not allow extension
             if only_best_tasks and not pricing_network.smallest_mus[self.sequence[-1]][ext_task]:
@@ -1527,7 +1541,8 @@ class Label():
                                                                                     execution_time_head, earliest_start_tail,
                                                                                     latest_finish_tail, latest_finish_viol_tail,
                                                                                     execution_time_tail, tail_weight, alpha,
-                                                                                    max_travel_time, min_travel_time, quant_travel_time)
+                                                                                    max_travel_time, min_travel_time, quant_travel_time,
+                                                                                 not (self.sequence[-2], self.sequence[-1]) in pricing_network.always_feas_edges)
                     # skip extension if arc is forbidden
                     if (ext.sequence[-2], ext.sequence[-1], ext.quantile_case_finish) in forbidden_arcs:
                         return None
@@ -1542,7 +1557,13 @@ class Label():
                     # after the tour has started, as the reduced cost of these constraints are non-positive
                     relevant_t_gr_branches = [tt for tt in node_in_tree.t_gr if tt >= ext.start_time_from_depot]
                     if not yuan_approach and len(relevant_t_gr_branches) == 0 and mu[ext_task] < ext.task_costs:
-                        return None
+                        # this conditions is skipped if task is part of a tour from the previous segment, but not its last
+                        # active task: in this case, extending along an arc that increases reduced costs can be beneficial
+                        # because it allows us to reach labels with very large mus, which can only be reached from the current
+                        # node
+                        if ext_task not in pricing_network.active_tasks:
+                            return None
+
                     # 4.6 add costs, consisting of worker occupation costs, branching costs
                     # and expected route costs (finish time+lateness penalty)
                     ext.start_time_cdf_per_task[ext_task] = start_time_cdf
@@ -1600,9 +1621,10 @@ class Label():
                     max_prob_leq_alpha = find_alpha_quantile(start_time_cdf, alpha)
                     max_prob_leq_alpha_finish = max_prob_leq_alpha + execution_time_tail
                     for other_task in ext.tasks:
-                        if max_prob_leq_alpha_finish +  min_travel_times[other_task, ext_task] > latest_starts[other_task]:
-                            ext.tasks.remove(other_task)
-                            ext.unreachable_tasks_prob += [other_task]
+                        if (other_task, ext_task) not in pricing_network.always_feas_edges:
+                            if max_prob_leq_alpha_finish +  min_travel_times[other_task, ext_task] > latest_starts[other_task]:
+                                ext.tasks.remove(other_task)
+                                ext.unreachable_tasks_prob += [other_task]
 
 
 
@@ -1619,6 +1641,7 @@ class Label():
                             # if start times differ: tour is not equal to a forbidden tour
                             if resources.forb_res[forb_tour_id][0] != ext.start_time_from_depot:
                                 ext.is_forbidden_subpath[forb_tour_id] = False
+
                     return ext
 
                 else:
