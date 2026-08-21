@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 
 def solve_one_instance(inst, travel_times_per_bin, rs, no_gomory_cuts, branch_on_task_finish_times, use_dmp, segment_length,
-                       lookahead, monte_carlo, time_limit_bap, time_limit_heur, cores_per_thread, verbose, plot_worker_usage,
+                       lookahead, monte_carlo, time_limit_bap, time_limit_heur, cores_per_thread, rng, verbose, plot_worker_usage,
                        yuan_approach = False,
                        normalize_workforce = False, inst_wf = None, json_out_file = None, warmstart = False,
                        solve_only_with_best_tasks = True, best_task_cnt = 4):
@@ -48,6 +48,8 @@ def solve_one_instance(inst, travel_times_per_bin, rs, no_gomory_cuts, branch_on
         Time limit for heuristic (in seconds).
     cores_per_thread: int
         Number of cores to use by gurobi when solving the master problem.
+    rng: np.random.RandomState.Generator
+        RNG object for sampling (only used if sample is set to True)
     verbose: bool
         Indicates if print statements should be forwarded to the console.
     plot_worker_usage: bool
@@ -101,7 +103,7 @@ def solve_one_instance(inst, travel_times_per_bin, rs, no_gomory_cuts, branch_on
                                                                   json_out_file, warmstart, solve_only_with_best_tasks,
                                                                   best_task_cnt, verbose, plot_worker_usage)
     else:
-        all_tours, sol_opt_segs, sol_heur_segs, heur_gaps, sol_per_seg = solve_monte_carlo(inst, th_segments, lookahead, rng_inst_loader,
+        all_tours, sol_opt_segs, sol_heur_segs, heur_gaps, sol_per_seg = solve_monte_carlo(inst, th_segments, lookahead, rng,
                                                                               travel_times_per_bin, no_gomory_cuts,
                                                                               branch_on_task_finish_times, use_dmp, time_limit_bap,
                                                                               time_limit_heur, cores_per_thread,
@@ -134,16 +136,6 @@ def solve_one_instance(inst, travel_times_per_bin, rs, no_gomory_cuts, branch_on
 
 
     # 7. Print solution summary
-    if verbose:
-        print(f"Solutions per segment:")
-        for seg_idx in sol_per_seg:
-            print("-" * 75, f"Segment {seg_idx}", "-" * 75)
-            if sol_per_seg[seg_idx]:
-                print(sol_per_seg[seg_idx].to_string())
-            else:
-                print("Segment infeasible or empty")
-            print("\n\n\n")
-
     print("All tours:")
     for tour in all_tours:
         print(tour.to_string(), "\n")
@@ -207,10 +199,10 @@ def solve(inst, th_segments, lookahead, travel_times_per_bin, no_gomory_cuts, br
         # Note: This function also returns all tours from the last segment that have finished
         tours_returning_to_depot, all_tours = ap.adjust_inst_to_segment(inst_seg, th_segments[seg_idx],
                                                                      travel_times_per_bin, sol_per_seg, lookahead,
-                                                                     all_tours, False)
+                                                                     all_tours)
 
         # 4. Restrict workforce to considered planning horizon
-        inst_seg = ap.restrict_workforce(inst, inst_seg, th_segments, seg_idx, all_tours, tours_returning_to_depot)
+        ap.restrict_workforce(inst, inst_seg, th_segments, seg_idx, all_tours, tours_returning_to_depot)
 
 
         # 5. Solve instance and return solution
@@ -390,7 +382,8 @@ if __name__ == "__main__":
     custom_service_level = 0.9
     # Solution approach: either (a) monte-carlo or (b) a-priori [for details, look into the docstrings of a_priori.py and monte_carlo.py
     monte_carlo = False
-    rng_inst_loader = np.random.default_rng(2947) # only used if monte_carlo == True
+    sample_cnt = 100 # no. of service time/time window samples that should be created
+    rng = np.random.default_rng(2947) # only used if monte_carlo == True
     # Estimator function that is used to derive deterministic estimates for service times and time windows
     # You can use the pre-implemented min_val, max_val, and expected_val functions, or define a function yourself
     estimator_fn = min_val if inst_type == "new" else min_val
@@ -403,13 +396,13 @@ if __name__ == "__main__":
     if inst_type == "classic":
         inst_location = f"{inst_path}/90min-20fph-sf_157.json"
         # inst_location =  f"{inst_path}/60min-20fph-sif_157.json" # with no cuts: returns a few disaggregated-infeas. sols
-        inst, travel_times_per_bin = load_InstWithTimeDiscr(inst_location, worker_quantile, estimator_fn, sample = monte_carlo,
+        inst, travel_times_per_bin = load_InstWithTimeDiscr(inst_location, worker_quantile, estimator_fn, sample_cnt=sample_cnt,
                                                             t_len = t_len_int, inst_type = inst_type, max_twviol = custom_max_twviol,
                                                             service_level = custom_service_level)
     elif inst_type == "new":
         inst_location = f"{inst_path}/1140min-5fph-sif_155.json" # large instance (should be solved with rolling horizon of length 60-90)
-        inst, travel_times_per_bin = load_InstWithTimeDiscr(inst_location, worker_quantile, estimator_fn, sample = monte_carlo,
-                                                            rng = rng_inst_loader, tt_data_path = inst_path, inst_type = inst_type,
+        inst, travel_times_per_bin = load_InstWithTimeDiscr(inst_location, worker_quantile, estimator_fn, sample_cnt=sample_cnt,
+                                                            rng = rng, tt_data_path = inst_path, inst_type = inst_type,
                                                             max_twviol = custom_max_twviol, service_level = custom_service_level)
     else:
         raise Exception(f"Unsupported instance type: {inst_type}")
@@ -437,12 +430,18 @@ if __name__ == "__main__":
     # Other parameters
     plot_worker_usage = True # if you want to have a plot of the worker usage over time at the end
     cores_per_thread = os.cpu_count() # use all cores by default, Hagn et al. (2026) used 4
-    verbose = True # True iff. print statements should be visible in the console
+    verbose = False # True iff. print statements should be visible in the console
 
     print(f"Solving for segment length {segment_length}, lookahead {lookahead}, rs={rs}")
-    solve_one_instance(inst, travel_times_per_bin, rs, no_gomory_cuts, branch_on_task_finish_times,
+    sol_per_seg, all_tours = solve_one_instance(inst, travel_times_per_bin, rs, no_gomory_cuts, branch_on_task_finish_times,
                                                 use_dmp, segment_length, lookahead, monte_carlo,
-                                                time_limit_bap, time_limit_heur, cores_per_thread,
+                                                time_limit_bap, time_limit_heur, cores_per_thread, rng,
                                                 verbose, plot_worker_usage, yuan_approach = yuan_approach,
                                                 solve_only_with_best_tasks = solve_only_with_best_tasks,
                                                 best_task_cnt = best_task_cnt,)
+
+    # optional: apply solution from a priori approach to multiple MC trajectories
+    apply_to_monte_carlo = True
+    if not monte_carlo and apply_to_monte_carlo:
+        print("Applying solution to monte-carlo trajectories.")
+        ap.apply_solution_to_monte_carlo(all_tours, inst, travel_times_per_bin, rng, sample_cnt)

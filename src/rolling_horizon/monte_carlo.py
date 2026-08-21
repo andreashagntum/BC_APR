@@ -58,16 +58,6 @@ def simulate(inst, inst_seg, th_segment, travel_times_per_bin, rng, all_tours,
     # 0.2 Get segment
     seg_start, seg_end = th_segment
 
-    # 0.3 If current simulation run is the final run that is used to compute actual finish times and task costs:
-    # Copy sampled time windows to actual time windows, because a correct earliest_finish will be needed for cost calculation
-    if final_run:
-        inst.earliest_start = {task: inst.sampled_earliest_start[task] for task in inst.earliest_start}
-        inst.latest_start = {task: inst.sampled_latest_start[task] for task in inst.latest_start}
-        inst.latest_start_viol = {task: inst.sampled_latest_start_viol[task] for task in inst.latest_start_viol}
-        inst.latest_finish_viol = {task: inst.sampled_latest_finish_viol[task] for task in inst.latest_finish_viol}
-        inst.earliest_finish = {task: inst.sampled_earliest_finish[task] for task in inst.earliest_finish}
-        inst.latest_finish = {task: inst.sampled_latest_finish[task] for task in inst.latest_finish}
-
     # 1. For each tour: sample all relevant parameters
     # Note: time windows and task execution times are once-sampled during instance loading, they are thus only
     # read from inst here
@@ -97,7 +87,7 @@ def simulate(inst, inst_seg, th_segment, travel_times_per_bin, rng, all_tours,
 
             # 2.3 Iteratively compute finish times for task edges
             for succ in tour.tasks + ["depot"]:
-                curr_time_bin = inst.bin_per_instant[curr_time]
+                curr_time_bin = inst.bin_per_instant[curr_time % inst.last_inst_of_day]
                 # Encode nodes into the name structure (source/sink instead of depot) that PricingNetwork expects
                 curr_node = "source" if curr == "depot" else curr
                 succ_node = "sink" if succ == "depot" else succ
@@ -131,6 +121,8 @@ def simulate(inst, inst_seg, th_segment, travel_times_per_bin, rng, all_tours,
                         # Quadratic penalty for delays
                         if finish_time > inst.sampled_latest_finish[succ]:
                             tour.task_cost_dict[succ] += inst.weights[succ] * (finish_time - inst.sampled_latest_finish[succ]) ** 2
+                        # Net task cost equals task cost minus minimum task cost
+                        tour.net_task_cost_dict[succ] = tour.task_cost_dict[succ] - inst.weights[succ] * inst.sampled_earliest_finish[succ]
                         # Store observed values: time window, task execution time, AND travel time
                         # 1. Travel time
                         knowledge_state.store_travel_time_knowledge(curr_node, succ_node, curr_time_bin,

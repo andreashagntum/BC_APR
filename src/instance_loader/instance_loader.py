@@ -4,7 +4,7 @@ the solver.
 
 import json
 from tqdm import tqdm
-import numpy as np
+import copy
 
 def convert_to_distributions(data):
     """Convert old data format into new format by converting deterministic time windows and service times into
@@ -33,9 +33,9 @@ def convert_to_distributions(data):
     return data
 
 
-def load_InstWithTimeDiscr(filepath, worker_quantile, estimator_fn, sample = False, rng = None,
-                           t_len = None, tt_data_path = None, inst_type = None, max_twviol = None,
-                           service_level = None):
+def load_InstWithTimeDiscr(filepath, worker_quantile, estimator_fn, monte_carlo = False, sample_cnt = 1,
+                           rng = None, t_len = None, tt_data_path = None, inst_type = None,
+                           max_twviol = None, service_level = None):
     """Load instance data into object of type Instance, which is the used by the solver.
 
     Parameters
@@ -46,10 +46,12 @@ def load_InstWithTimeDiscr(filepath, worker_quantile, estimator_fn, sample = Fal
         parameter gamma from the paper, used in the workforce constraints.
     estimator_fn: function
         Function used to estimate service times and time windows (e.g. min, max, mean)
-    sample: bool
-        If set to True, service times and time windows are once-sampled when the instance is constructed
+    monte_carlo: bool
+        Indicates if the instance is intended to be solved using the monte-carlo approach
+    sample_cnt: int
+        Number of samples requested
     rng: np.random.RandomState.Generator
-        RNG object for sampling (only used if sample is set to True)
+        RNG object for sampling
     t_len: int or None
         Time length per instance. Only used if instance JSON contains no instantLength key
     tt_data_path: str
@@ -99,41 +101,45 @@ def load_InstWithTimeDiscr(filepath, worker_quantile, estimator_fn, sample = Fal
         data["instantLength"] = t_len
     inst.always_feas_edges = [] # list of time bins and edges for which chance constr./LFv feas. check will be skipped in the next BPC&S iteration
 
-    # if sample requested: compute sampled service times and time windows
-    if sample:
-        inst.monte_carlo = True
-        inst.sampled_modes = {}
-        inst.sampled_modes_with_domination = {}
-        inst.sampled_earliest_start = {}
-        inst.sampled_latest_finish = {}
-        inst.sampled_latest_finish_viol = {}
+    # compute sampled service times and time windows
+    inst.monte_carlo = True
+    inst.multi_sampled_modes = [{} for _ in range(sample_cnt)]
+    inst.multi_sampled_modes_with_domination = [{} for _ in range(sample_cnt)]
+    inst.multi_sampled_earliest_start = [{} for _ in range(sample_cnt)]
+    inst.multi_sampled_latest_finish = [{} for _ in range(sample_cnt)]
+    inst.multi_sampled_latest_finish_viol = [{} for _ in range(sample_cnt)]
+    for i in range(sample_cnt):
         for task in data["tasks"]:
             # sample task execution times
-            inst.sampled_modes[task] = {}
-            inst.sampled_modes_with_domination[task] = {}
+            inst.multi_sampled_modes[i][task] = {}
+            inst.multi_sampled_modes_with_domination[i][task] = {}
             for f in data["modes"][task]:
                 items = list(data["modes"][task][f].items())
                 if rng:
-                    inst.sampled_modes[task][f] = rng.choice([k for (k, _) in items], p = [p for (_, p) in items])
+                    inst.multi_sampled_modes[i][task][f] = rng.choice([k for (k, _) in items], p = [p for (_, p) in items])
                 else: # fallback for old instance format
-                    inst.sampled_modes[task][f] = items[0][0]
+                    inst.multi_sampled_modes[i][task][f] = items[0][0]
                 # for all other dominated modes, values will be set at runtime
-                inst.sampled_modes_with_domination[task][f] = inst.sampled_modes[task][f]
+                inst.multi_sampled_modes_with_domination[i][task][f] = inst.multi_sampled_modes[i][task][f]
             # sample time window
             items_tw = list(data["earliest_start"][task].items())
             if rng:
-                inst.sampled_earliest_start[task] = rng.choice([k for (k, _) in items_tw], p = [p for (_, p) in items_tw])
+                inst.multi_sampled_earliest_start[i][task] = rng.choice([k for (k, _) in items_tw], p = [p for (_, p) in items_tw])
             else: # fallback for old instance format
-                inst.sampled_earliest_start[task] = items_tw[0][0]
+                inst.multi_sampled_earliest_start[i][task] = items_tw[0][0]
             # latest finish: depends on earliest start + scheduled time window length
             tw_len = data["scheduled_latest_finish"][task] - data["scheduled_earliest_start"][task]
-            inst.sampled_latest_finish[task] = inst.sampled_earliest_start[task] + tw_len
-            inst.sampled_latest_finish_viol[task] = inst.sampled_latest_finish[task] + data["max_twviol"]
+            inst.multi_sampled_latest_finish[i][task] = inst.multi_sampled_earliest_start[i][task] + tw_len
+            inst.multi_sampled_latest_finish_viol[i][task] = inst.multi_sampled_latest_finish[i][task] + data["max_twviol"]
             # Note: we do not explicitly computed earliest_finish and latest_start because sampling is only used for MC
             # tour evaluation, which in turn only cares about earliest_start and latest_finish
-    else:
-        inst.monte_carlo = False
+    inst.sampled_modes = copy.deepcopy(inst.multi_sampled_modes[0])
+    inst.sampled_modes_with_domination = copy.deepcopy(inst.multi_sampled_modes_with_domination[0])
+    inst.sampled_earliest_start = copy.deepcopy(inst.multi_sampled_earliest_start[0])
+    inst.sampled_latest_finish = copy.deepcopy(inst.multi_sampled_latest_finish[0])
+    inst.sampled_latest_finish_viol =copy.deepcopy(inst.multi_sampled_latest_finish_viol[0])
 
+    inst.monte_carlo = monte_carlo
 
     # convert task execution times to deterministic values
     inst.modes = {task: {mode: estimator_fn(data["modes"][task][mode]) for mode in data["modes"][task]} for task in data["modes"]}
@@ -228,8 +234,7 @@ def load_InstWithTimeDiscr(filepath, worker_quantile, estimator_fn, sample = Fal
 
 
     inst.bins = list(travel_times_per_bin.keys())
-    if sample:
-        inst.sampled_tts = {b: {} for b in inst.bins}
+    inst.sampled_tts = {b: {} for b in inst.bins}
 
     inst.skill_levels = []
     for level in data["skill_levels"]:
@@ -276,9 +281,9 @@ def load_InstWithTimeDiscr(filepath, worker_quantile, estimator_fn, sample = Fal
     inst.modes_with_domination = {}
     for task in inst.tasks:
         inst.modes_with_domination[task] = {}
-    
     for formation_id in inst.formations:
         for formation_id_dom in inst.formations:
+
             dominated = True
             # first check the nr of workers is the same
             min_skill_formation = min(inst.formations_w_d[formation_id].keys())
@@ -299,10 +304,11 @@ def load_InstWithTimeDiscr(filepath, worker_quantile, estimator_fn, sample = Fal
                     # update modes_with_domination
                     if formation_id_dom not in inst.modes_with_domination[task]:
                         inst.modes_with_domination[task][formation_id_dom] = inst.modes[task][formation_id]
-                        # transfer sampled service time if needed
-                        if sample:
-                            inst.sampled_modes_with_domination[task][formation_id_dom] = inst.sampled_modes[task][formation_id]
-                    
+                        # transfer sampled service time
+                        inst.sampled_modes_with_domination[task][formation_id_dom] = inst.sampled_modes[task][formation_id]
+                        for i in range(sample_cnt):
+                            inst.multi_sampled_modes_with_domination[i][task][formation_id_dom] = inst.multi_sampled_modes_with_domination[i][task][formation_id]
+
                     # update tasks_per_formation_with_domination
                     if task not in inst.tasks_per_formation_with_domination[formation_id_dom]:
                         inst.tasks_per_formation_with_domination[formation_id_dom].append(task) 
@@ -311,13 +317,23 @@ def load_InstWithTimeDiscr(filepath, worker_quantile, estimator_fn, sample = Fal
     inst.earliest_finish = {task: inst.earliest_start[task] + min(inst.modes[task].values()) for task in data["tasks"]}
     inst.latest_start = {task: inst.latest_finish[task] - min(inst.modes[task].values()) for task in data["tasks"]}
     inst.latest_start_viol = {task: inst.latest_start[task] + data["max_twviol"] for task in data["tasks"]}
-    # if sampling desired: also sampled earliest finish times, as we will need it for net cost computation
-    if sample:
-        inst.sampled_earliest_finish = {task: inst.sampled_earliest_start[task] + min(inst.sampled_modes[task].values())
-                                        for task in data["tasks"]}
-        inst.sampled_latest_start = {task: inst.latest_start[task] for task in data["tasks"]}
-        inst.sampled_latest_start_viol = {task: inst.latest_start_viol[task] for task in data["tasks"]}
-
+    # also sample earliest finish times, as we will need it for net cost computation
+    inst.sampled_earliest_finish = {task: inst.sampled_earliest_start[task] + min(inst.sampled_modes[task].values())
+                                    for task in data["tasks"]}
+    inst.sampled_latest_start = {task: inst.sampled_latest_finish[task] - min(inst.sampled_modes[task].values())
+                                 for task in data["tasks"]}
+    inst.sampled_latest_start_viol = {task: inst.sampled_latest_finish_viol[task] - min(inst.sampled_modes[task].values())
+                                      for task in data["tasks"]}
+    # transfer to multi-sample
+    inst.multi_sampled_earliest_finish = [{task: inst.multi_sampled_earliest_start[i][task] +
+                                                 min(inst.multi_sampled_modes[i][task].values())
+                                           for task in data["tasks"]} for i in range(sample_cnt)]
+    inst.multi_sampled_latest_start = [{task: inst.multi_sampled_latest_finish[i][task] -
+                                              min(inst.multi_sampled_modes[i][task].values()) for task in data["tasks"]}
+                                       for i in range(sample_cnt)]
+    inst.multi_sampled_latest_start_viol = [{task: inst.multi_sampled_latest_finish_viol[i][task] -
+                                              min(inst.multi_sampled_modes[i][task].values()) for task in data["tasks"]}
+                                       for i in range(sample_cnt)]
 
     return inst, travel_times_per_bin
 

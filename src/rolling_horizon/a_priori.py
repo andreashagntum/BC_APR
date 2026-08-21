@@ -8,6 +8,9 @@ values, potentially losing solution quality by that.
 """
 import copy
 from src.instance_loader.instance_loader import add_travel_times_per_bin_restricted
+from src.rolling_horizon.monte_carlo import simulate, KnowledgeState
+import numpy as np
+from tqdm import tqdm
 
 def adjust_inst_to_segment(inst, th_segment, travel_times_per_bin, sol_per_seg, lookahead, all_tours):
     """Adjust a (deepcopied version of the input) inst object according to a passed th_segment. The following changes are made:
@@ -247,5 +250,48 @@ def restrict_workforce(inst, inst_seg, th_segments, seg_idx,
     inst_seg.workers_w_d = {k: {t: v for (t, v) in inst_seg.workers_w_d[k].items() if
                                 (t >= inst_seg.begin_horizon and t <= inst_seg.end_horizon)}
                             for k in inst_seg.workers_w_d}
+
+    return
+
+
+def apply_solution_to_monte_carlo(all_tours, inst, travel_times_per_bin, rng, sample_cnt = 1):
+    """Apply a solution to (one or multiple) monte-carlo samples.
+    Repeatedly samples travel times, service times, and task execution times and applies the given set of tours to it.
+
+
+    """
+    obj_per_sample = []
+    for i in tqdm(range(sample_cnt), "Trajectories:"):
+        # 1. Deepcopy instance and tours
+        inst_seg = copy.deepcopy(inst)
+        seg_tours = copy.deepcopy(all_tours)
+
+        # 2. Fetch service and task execution times
+        for attr in ["sampled_modes", "sampled_modes_with_domination", "sampled_earliest_start", "sampled_latest_finish",
+                     "sampled_latest_finish_viol", "sampled_earliest_finish", "sampled_latest_start", "sampled_latest_start_viol"]:
+            setattr(inst_seg, attr, getattr(inst_seg, f"multi_{attr}")[i])
+
+        # 3. Reset sampled travel times
+        inst_seg.sampled_tts = {b: {} for b in inst.bins}
+
+        # 4. Definy dummy knowledge state
+        knowledge_state = KnowledgeState(inst_seg.begin_horizon)
+
+        # 5. Simulate
+        seg_tours = simulate(inst_seg, inst_seg, (np.inf, np.inf), travel_times_per_bin,
+                             rng, seg_tours, knowledge_state, final_run = True)
+        # 6. Store results
+        obj_per_sample.append((sum([tour.task_cost_dict[task] for tour in seg_tours for task in tour.tasks]),
+                              sum([tour.net_task_cost_dict[task] for tour in seg_tours for task in tour.tasks])))
+
+
+
+    print(f"Done. Objective value summary:")
+    min_val = min(obj_per_sample, key = lambda x: x[1]) # sort based on net value
+    max_val = max(obj_per_sample, key = lambda x: x[1]) # sort based on net value
+    avg_val = (np.mean([v[0] for v in obj_per_sample]), np.mean([v[1] for v in obj_per_sample]))
+    print(f"Minimum objective value: {min_val[0]} (net {min_val[1]})")
+    print(f"Maximum objective value: {max_val[0]} (net {max_val[1]})")
+    print(f"Average objective value: {avg_val[0]} (net {avg_val[1]})")
 
     return
